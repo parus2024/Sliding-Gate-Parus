@@ -3,7 +3,7 @@
 ![ESPHome Logo](images/esphome-icon.png) ![Home Assistant Logo](images/ha-icon.png)
 <p align="center">
     <img alt="Static Badge" src="https://img.shields.io/badge/made%20by-ParusSmartHome-blue">
-    <img alt="Static Badge" src="https://img.shields.io/badge/version-v2.0%20Beta-green">
+    <img alt="Static Badge" src="https://img.shields.io/badge/version-v1.0%20Stable-green">
     <img alt="Static Badge" src="https://img.shields.io/badge/esphome min version-2025.7.5-red">
     <img alt="Static Badge" src="https://img.shields.io/badge/license-MIT-orange">
 </p>
