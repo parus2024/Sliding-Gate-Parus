@@ -1,6 +1,6 @@
 # Sliding Gates Parus: Умные откатные ворота на ESPHome
 
-![ESPHome Logo](image/esphome-icon.png) ![Home Assistant Logo](image/ha-icon.png)
+![ESPHome Logo](images/esphome-icon.png) ![Home Assistant Logo](images/ha-icon.png)
 <p align="center">
     <img alt="Static Badge" src="https://img.shields.io/badge/made%20by-ParusSmartHome-blue">
     <img alt="Static Badge" src="https://img.shields.io/badge/version-v2.0%20Beta-green">
