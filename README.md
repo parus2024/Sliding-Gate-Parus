@@ -129,6 +129,7 @@
 
 ### Substitutions
 Настройте параметры в начале YAML:
+```
 substitutions:
   name: sliding-gate-parus
   friendly_name: Sliding Gate Parus
@@ -166,7 +167,7 @@ substitutions:
   rf_do_pin: GPIO26
   rtttl_pin: GPIO2
   led_status_pin: GPIO1
-
+```
 ### Глобальные Переменные
 - `endstop`: Конечная точка (калибруется при обучении). Можно задать вручную через меню на экране или web страницу или приложение
 - Прочие переменные.
