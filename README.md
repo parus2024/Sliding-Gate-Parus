@@ -200,11 +200,11 @@ substitutions:
 - [yaml файл прошивки](.yaml)
 - [внешний вид](images/gate_montage.jpg)
 - [внешний вид](images/sliding-gate1.jpg)
-- [Схема соединений](images/sliding-gate-v1.jpg)
+- [Схема соединений](images/sliding-gate-v1-shema.jpg)
 - [Видео#1 YOUTUBE](https://youtu.be/vRvpt_rSHtg)
-- [Видео#2 YOUTUBE](https://youtu.be/vRvpt_rSHtg)
+- [Видео#2 YOUTUBE](https://youtu.be/aQOfair8yUY)
 - [Видео#1 RuTube](https://rutube.ru/video/d493d4d62e90040b649979b2341e3792/)
-- [Видео#2 RuTube](https://rutube.ru/video/d493d4d62e90040b649979b2341e3792/)
+- [Видео#2 RuTube](https://rutube.ru/video/5781f3757af82c949ad13937eab37b88/)
 - [Файлы для печати]()
 
 ---
