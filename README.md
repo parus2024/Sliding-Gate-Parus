@@ -198,8 +198,8 @@ substitutions:
 ## 📊 Скриншоты и Видео
 
 - [yaml файл прошивки](.yaml)
-- [внешний вид](.jpg)
-- [внешний вид].jpg)
+- [внешний вид](images/gate_montage.jpg)
+- [внешний вид](images/sliding-gate1.jpg)
 - [Схема соединений](images/sliding-gate-v1.jpg)
 - [Видео#1 YOUTUBE](https://youtu.be/vRvpt_rSHtg)
 - [Видео#2 YOUTUBE](https://youtu.be/vRvpt_rSHtg)
