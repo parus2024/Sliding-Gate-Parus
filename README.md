@@ -200,9 +200,11 @@ substitutions:
 - [yaml файл прошивки](.yaml)
 - [внешний вид](.jpg)
 - [внешний вид].jpg)
-- [Схема соединений](roller-blind-img/smart-roller-blind-shema.jpg)
-- [Видео#1 YOUTUBE](https://youtu.be/)
-- [Видео#2 RuTube](https://rutube.ru/)
+- [Схема соединений](images/sliding-gate-v1.jpg)
+- [Видео#1 YOUTUBE](https://youtu.be/vRvpt_rSHtg)
+- [Видео#2 YOUTUBE](https://youtu.be/vRvpt_rSHtg)
+- [Видео#1 RuTube](https://rutube.ru/video/d493d4d62e90040b649979b2341e3792/)
+- [Видео#2 RuTube](https://rutube.ru/video/d493d4d62e90040b649979b2341e3792/)
 - [Файлы для печати]()
 
 ---
