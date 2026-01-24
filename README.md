@@ -1,6 +1,7 @@
 # Sliding Gates Parus: Умные откатные ворота на ESPHome
 
 ![ESPHome Logo](images/esphome-icon.png) ![Home Assistant Logo](images/ha-icon.png)
+![внешний вид1](images/sliding-gate1.jpg)
 <p align="center">
     <img alt="Static Badge" src="https://img.shields.io/badge/made%20by-ParusSmartHome-blue">
     <img alt="Static Badge" src="https://img.shields.io/badge/version-v1.0%20Stable-green">
@@ -199,7 +200,7 @@ substitutions:
 
 - [yaml файл прошивки](sliding_gate_parus_v1.yaml)
 - [внешний вид](images/gate_montage.jpg)
-- [внешний вид](images/sliding-gate1.jpg)
+- [внешний вид1](images/sliding-gate1.jpg)
 - [Схема соединений](images/sliding-gate-v1-shema.jpg)
 - [Видео#1 YOUTUBE](https://youtu.be/vRvpt_rSHtg)
 - [Видео#2 YOUTUBE](https://youtu.be/aQOfair8yUY)
