@@ -1,0 +1,2452 @@
+substitutions:
+  name: sliding-gate-parus-v1
+  friendly_name: Sliding Gate Parus v1
+  friendly_name_short: sliding_gate_parus_v1
+  version: "24.01.2026"
+  device_ip: 192.168.0.170
+  reboot_timeout: 0s
+# Motor Driver  
+  encoder_pin_a: GPIO32
+  encoder_pin_b: GPIO33
+  motor_for_pin: GPIO25
+  motor_rev_pin: GPIO19
+  motor_en_pin: GPIO23
+# Display  
+  cs_pin: GPIO27
+  dc_pin: GPIO15
+  reset_pin: EN
+  clk_pin: GPIO14 # (sck) 
+  miso_pin: GPIO12 # TFT(MISO)
+  mosi_pin: GPIO13 # TFT(MOSI)
+  backlight_pin: GPIO5 # LED яркость дисплея
+  sda1: GPIO21
+  scl1: GPIO22
+  gerkon_pin: GPIO3
+#  свободен GPIO17
+  light_barrier_switch_pin: GPIO0
+  light_barrier_pin: GPIO16
+# Button
+  open_button_pin: GPIO18
+  close_button_pin: GPIO34
+  one_touch_control_button_pin: GPIO39
+  settings_button_pin: GPIO36
+  relay_lamp_pin: GPIO4
+  rf_ao_pin: GPIO35 # & 
+  rf_do_pin: GPIO26
+  rtttl_pin: GPIO2
+  led_status_pin: GPIO1
+  ok_icon: "\U0000f046" # ok
+  error_icon: "\U0000f00d" # error
+  alert_icon: "\U0000f071" # alert
+  back_icon: "\U0000f112" # back
+  movement_icon: "\U0000f0ec" # movement
+  effort_icon: "\U0000f255" # effort
+  reset_icon: "\U0000f021" # reset
+  rf_icon: "\U0000f1bc" # rf
+  menu_icon: "\U0000f0ca" # menu
+  up_arrow_icon: "\U0000f176" # up_arrow
+  down_arrow_icon: "\U0000f175" # down_arrow
+  right_arrow_icon: "\U0000f178" # right_arrow
+  left_arrow_icon: "\U0000f177" # left_arrow
+  check_icon: "\U0000f00c" # check
+  enter_icon: "\U0000f149" # enter
+  arrow_collapse_horizontal_icon: "\U000f084c" # ArrowCollapseHorizontal
+  arrow_expand_horizontal_icon: "\U000f084e" # ArrowExpandHorizontal
+  remote_icon: "\U000f0454" # Remote
+  setting_icon: "\U000f0493" # Setting
+  repeat_icon: "\U000f0456" # Repeat
+# rtttl
+  siren: siren:d=8,o=5,b=80:d,e,d,e
+  short: short:d=4,o=5,b=100:16e6
+  two_short: 'two_short:d=4,o=5,b=100:16e6,16e6'
+  long: 'long:d=1,o=5,b=100:e6'
+  success: scale_up:d=32,o=5,b=100:c,c#,d#,e,f#,g#,a#,b
+  alarm: 'alarm:d=4,o=5,b=165:a#,8p,a#,8p,a#,8p,a#'
+  warning: warning:d=4,o=5,b=180:a,8p,a,8p,a,8p,a
+  pin_pullup: "true"
+
+#<<: !include attach/common/esphome.yaml
+<<: !include attach/common/esp/wroom32_idf.yaml
+<<: !include attach/common/logger/debug.yaml
+<<: !include attach/common/api.yaml
+<<: !include attach/common/ota.yaml
+<<: !include attach/common/wifi.yaml
+<<: !include attach/common/web/web_server3.yaml
+<<: !include attach/common/bus/i2c_a.yaml
+
+packages:
+  - !include attach/packages/standart.yaml
+  - !include attach/packages/time_sun.yaml
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  name_add_mac_suffix: false
+  project:
+    name: parus.${friendly_name}
+    version: ${version}
+  on_boot:
+    - priority: 200.0
+      then:
+      - if: # Если ворота закрыты
+          condition:
+            - lambda: 'return id(gate_position_global) == 0;'
+          then: # Опубликовать состояние и т.д.
+            - cover.template.publish:
+                id: gate
+                state: CLOSED
+                current_operation: IDLE
+      - if: # Если ворота открыты
+          condition:
+            - lambda: 'return id(gate_position_global) == id(endstop);'
+          then: # Опубликовать состояние и т.д.
+            - cover.template.publish:
+                id: gate
+                state: OPEN
+                current_operation: IDLE
+      - if: # Если ворота находятся в промежуточном положении
+          condition:
+            - lambda: 'return (id(gate_position_global) != 0) && (id(gate_position_global) != id(endstop));'
+          then: # Опубликовать состояние и т.д.
+            - cover.template.publish:
+                id: gate
+                position: !lambda 'return (float(float(id(gate_position_global)) / float(id(endstop))));' 
+                current_operation: IDLE
+#      - text_sensor.template.publish:
+#          id: endstop_sensor
+#          state: !lambda 'return std::to_string(id(endstop));'  # Преобразуем число в строку
+      - text_sensor.template.publish: # Добавляем запись в текстовый сенсор
+          id: setting_mode
+          state: !lambda 'return "Настройка отключена";'
+      - delay: 2s
+      - lambda: |-
+          id(endstop_sensor_test).publish_state(float(id(endstop)));
+      - if: # Если если ошибок нет, включаем зеленый, иначе красный
+          condition:
+            - lambda: 'return (!id(effort_error).state && !id(position_limit_error).state);'
+          then:
+            - light.turn_on: # Индикация нет ошибок
+                id: state_led
+                brightness: 50%
+                red: 0%
+                green: 100%
+                blue: 0%
+                effect: "None"
+          else:
+            - light.turn_on: # Индикация ошибки!
+                id: state_led
+                brightness: 50%
+                red: 100%
+                green: 0%
+                blue: 0%
+                effect: "Alarm"
+    - priority: -100.0
+      then:
+        - delay: 10s
+        - logger.log: "=== GLOBAL VARIABLES AT STARTUP ==="
+        - lambda: |-
+            ESP_LOGD("globals", "gate_position_global: %u", id(gate_position_global));
+            ESP_LOGD("globals", "openclosed: %s", id(openclosed) ? "true" : "false");
+            ESP_LOGD("globals", "last_direction: %d", id(last_direction));
+            ESP_LOGD("globals", "endstop: %u", id(endstop));
+            ESP_LOGD("globals", "settingmode: %d", id(settingmode));
+            ESP_LOGD("globals", "motor_running: %s", id(motor_running) ? "true" : "false");
+            ESP_LOGD("globals", "safety_triggered: %s", id(safety_triggered) ? "true" : "false");
+            ESP_LOGD("globals", "last_movement_start: %u", id(last_movement_start));
+            ESP_LOGD("globals", "selftest_global: %s", id(selftest_global) ? "true" : "false");
+            ESP_LOGD("globals", "effort_limit: %s", id(effort_limit) ? "true" : "false");
+            ESP_LOGD("globals", "effort_calibration_running: %s", id(effort_calibration_running) ? "true" : "false");
+            ESP_LOGD("globals", "max_measured_current: %.3f", id(max_measured_current));
+            ESP_LOGD("globals", "max_current_internal: %.3f", id(max_current_internal));
+            id(any_button).publish_state(true);
+globals:
+  - id: gate_position_global # Целое число для хранения позиции шагового двигателя на случай перезагрузки
+    type: unsigned int
+    restore_value: yes
+    initial_value: '0'
+  - id: openclosed # Глобальная переменная, указывает состояние роллеты (1 = открыто, 0 = закрыто).
+    type: bool
+    restore_value: yes
+    initial_value: '0'
+  - id: last_direction
+    type: int
+    initial_value: '0' # 0 = открытие, 1 = закрытие (начнём с открытия)
+  - id: endstop # Переменная для хранения конечной точки  (полностью открыто).(насколько далеко двигаться шаговому двигателю)
+    type: unsigned int
+    restore_value: yes
+    initial_value: '10000'
+  - id: settingmode # Глобальная переменная, указывает этап настройки (1 = закрытие, 2 = открытие, 3 = завершение).
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: motor_running # Флаг движения мотора по току
+    type: bool
+    initial_value: 'false'
+  - id: safety_triggered # флаг сработки скрипта защиты по усилиям
+    type: bool
+    initial_value: 'false'
+  - id: timeout_triggered # флаг сработки скрипта защиты по таймауту
+    type: bool
+    initial_value: 'false'
+  - id: last_movement_start # Можно переиспользовать для start_time
+    type: uint32_t # Изменил на uint32_t для millis()
+    initial_value: '0'
+  - id: selftest_global
+    type: bool
+    initial_value: 'true'
+    restore_value: yes
+  - id: effort_limit # Флаг превышения усилий(ошибка)
+    type: bool
+    initial_value: 'false'
+    restore_value: yes
+  - id: effort_calibration_running # Флаг процесса калибровка усилий
+    type: bool
+    initial_value: 'false'
+#    restore_value: yes
+  - id: max_measured_current # Максимальый ток замеров процесса калибровки
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  - id: max_current_internal # Максимальный рабочий ток (дубль в number)
+    type: float
+    restore_value: yes
+    initial_value: '3.0'
+
+color:
+  - id: my_red
+    red: 100%
+    green: 0%
+    blue: 0%
+  - id: my_orange
+    red: 100%
+    green: 60%
+    blue: 0%
+  - id: my_yellow
+    red: 100%
+    green: 100%
+    blue: 0%
+  - id: my_green
+    red: 0%
+    green: 100%
+    blue: 0%
+  - id: my_blue
+    red: 50%
+    green: 50%
+    blue: 100%
+  - id: my_gray
+    red: 50%
+    green: 50%
+    blue: 50%
+  - id: my_siren
+    red: 100%
+    green: 50%
+    blue: 100%
+
+font:
+  - file: "fonts/fontawesome-webfont.ttf"
+    id: faw_24
+    size: 24
+    bpp: 4
+    glyphs: [
+      "\U0000f046", # ok
+      "\U0000f00d", # error
+      "\U0000f071", # alert
+      "\U0000f112", # back
+      "\U0000f0EC", # movement
+      "\U0000f255", # effort
+      "\U0000f021", # reset
+      "\U0000f1bc", # rf
+      "\U0000f0ca", # menu
+      "\U0000f176", # up_arrow
+      "\U0000f175", # down_arrow
+      "\U0000f178", # right_arrow
+      "\U0000f177", # left_arrow
+      "\U0000f00c", # check
+    ]
+  - file: "fonts/materialdesignicons-webfont.ttf"
+    id: mdi_24
+    size: 24
+    bpp: 4
+    glyphs: [
+      "\U000f084c", # ArrowCollapseHorizontal
+      "\U000f084e", # ArrowExpandHorizontal
+      "\U000f0454", # Remote
+      "\U000f0493", # Setting
+      "\U000f0456", # Repeat
+    ]
+  - file: "fonts/arial.ttf"
+    id: arial_24
+    size: 24
+    glyphs: |-
+      ~*<>!"%()+=,-_.:°0123456789АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЬЫЪЭЮЯABCDEFGHIJKLMNOPQRSTUVWXYZ абвгдеёжзийклмнопрстуфхцчшщьыъэюяabcdefghijklmnopqrstuvwxyz'/
+  - file: "fonts/arial.ttf"
+    id: arial_14
+    size: 14
+    glyphs: |-
+      ~*<>!"%()+=,-_.:°0123456789АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЬЫЪЭЮЯABCDEFGHIJKLMNOPQRSTUVWXYZ абвгдеёжзийклмнопрстуфхцчшщьыъэюяabcdefghijklmnopqrstuvwxyz'/
+  - file: "fonts/arial.ttf"
+    id: arial_18
+    size: 18
+    glyphs: |-
+      ~*<>!"%()+=,-_.:°0123456789АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЬЫЪЭЮЯABCDEFGHIJKLMNOPQRSTUVWXYZ абвгдеёжзийклмнопрстуфхцчшщьыъэюяabcdefghijklmnopqrstuvwxyz'/
+
+spi:
+  clk_pin: ${clk_pin}
+  mosi_pin: ${mosi_pin}
+  miso_pin: ${miso_pin}
+
+display:
+  - platform: ili9xxx # mipi_spi
+    model: ILI9341 #ST7789V #
+    cs_pin: ${cs_pin}
+    dc_pin: ${dc_pin}
+#    reset_pin: ${reset_pin}
+#    auto_clear_enabled: False
+    update_interval: 1s
+    invert_colors: false
+    show_test_card: false
+    id: my_display
+    color_palette: 8bit
+    rotation: 270
+#    dimensions:
+#      height: 240
+#      width: 320
+#      offset_height: 0
+#      offset_width: 0
+#    transform:
+#      swap_xy: false
+#      mirror_x: false
+#      mirror_y: true
+    pages:
+      - id: main_page 
+        lambda: |-
+          //Проверка на ошибку (id(gate_error).state):
+          //Если ошибка есть, выводим текущее время в первых 4 сегментах и "ERROR" в последних 4 сегментах.
+          //Проверка на движение (!id(gate_moving).state):
+          //// static_cast<int>(id(gate).position * 100)
+          // Получаем данные о состоянии ворот
+          auto cover = id(gate);
+          CoverOperation op = cover->current_operation;
+          float pos = cover->position;
+          int percent = static_cast<int>(pos * 100);
+
+          std::string status_gate;
+
+          if (op == CoverOperation::COVER_OPERATION_IDLE) {
+            if (percent == 0) {
+              //status_gate = "ЗАКРЫТО 0%%";
+              status_gate = "     ЗАКРЫТО";
+            } else if (percent == 100) {
+              //status_gate = "ОТКРЫТО 100%%";
+              status_gate = "     ОТКРЫТО";
+            } else {
+              //status_gate = "СТОП. ОТКРЫТО " + std::to_string(percent) + "%%";
+              status_gate = "  СТОП. ОТКРЫТО";
+            }
+          } else if (op == CoverOperation::COVER_OPERATION_OPENING) {
+            //status_gate = "ОТКРЫВАЕТСЯ " + std::to_string(percent) + "%%";
+            status_gate = "ОТКРЫВАЕТСЯ";
+          } else if (op == CoverOperation::COVER_OPERATION_CLOSING) {
+            //status_gate = "ЗАКРЫВАЕТСЯ " + std::to_string(percent) + "%%";
+            status_gate = "ЗАКРЫВАЕТСЯ";
+          }
+          
+          it.printf(5, 24, id(arial_24), my_blue, status_gate.c_str());
+          it.printf(318, 18, id(arial_36), my_blue, TextAlign::TOP_RIGHT, "%d%%", static_cast<int>(id(gate).position * 100));
+          it.print(5, 3, id(arial_14), my_yellow, TextAlign::TOP_LEFT, "SLIDING GATES PARUS V1");
+          it.strftime(185, 3, id(arial_14), my_green, TextAlign::TOP_LEFT, "%H:%M:%S", id(homeassistant_time).now());
+          it.printf(310, 3, id(arial_14), TextAlign::TOP_RIGHT, "WIFI %.0f%%", id(wifi_signal_percent).state);
+          it.line(190, 145, 190, 213, my_orange); // вертикальная линия 1
+          //it.line(100, 210, 100, it.get_height(), my_orange); // вертикальная линия между временем и uptime
+          it.line(0, 20, it.get_width(), 20, my_orange); // линия 1 над строкой состояния ворот
+          it.line(0, 55, it.get_width(), 55, my_orange); // линия 2
+          it.line(0, 85, it.get_width(), 85, my_orange); // линия 3
+          it.line(0, 115, it.get_width(), 115, my_orange); // линия 4
+          it.line(0, 145, it.get_width(), 145, my_orange); // линия 5
+          it.line(0, 213, it.get_width(), 213, my_orange); // линия 5
+          it.rectangle(0,  0, it.get_width(), it.get_height(), id(my_orange)); // рамка по периметру
+
+          if (!id(position_limit_error).state) {
+          it.print(5, 57, id(arial_24), my_green, TextAlign::TOP_LEFT, "ПРЕДЕЛ ПОЛОЖЕНИЯ");
+          it.print(315, 57, id(faw_24), my_green, TextAlign::TOP_RIGHT, "${ok_icon}");
+          } else { // Тест не пройден:  красный статус
+            static int i = 0;
+            i++;
+            if ((i % 2) == 0) {
+              it.print(5, 57, id(arial_24), my_red, TextAlign::TOP_LEFT, "ПРЕДЕЛ ПОЛОЖЕНИЯ");
+              it.print(315, 57, id(faw_24), my_red, TextAlign::TOP_RIGHT, "${error_icon}");
+            }
+          }
+
+          // УСИЛИЯ
+          if (id(effort_calibration_running)) {
+            static int i = 0;
+            i++;
+            if ((i % 2) == 0) {
+              it.print(5, 87, id(arial_24), my_green, TextAlign::TOP_LEFT, "КАЛИБРОВКА УСИЛИЙ");
+            }
+          }
+          else if (!id(timeout_triggered) && !id(effort_limit) && id(effort_limit_switch).state) {
+              // Усилия и длительность в норме, включены → зелёный статус
+              it.print(5, 87, id(arial_24), my_green, TextAlign::TOP_LEFT, "УСИЛИЯ В НОРМЕ");
+              it.print(315, 87, id(faw_24), my_green, TextAlign::TOP_RIGHT, "${ok_icon}");
+          }
+          else if (!id(timeout_triggered) && id(effort_limit) && id(effort_limit_switch).state) {
+            static int i = 0;
+            i++;
+            if ((i % 2) == 0) {
+              it.print(5, 87, id(arial_24), my_red, TextAlign::TOP_LEFT, "УСИЛИЯ ПРЕВЫШЕНЫ!");
+              it.print(315, 87, id(faw_24), my_red, TextAlign::TOP_RIGHT, "${error_icon}");
+            }
+          }
+          else if (id(timeout_triggered)) {
+            static int i = 0;
+            i++;
+            if ((i % 2) == 0) {
+              it.print(5, 87, id(arial_24), my_red, TextAlign::TOP_LEFT, "TIMEOUT ПРЕВЫШЕН!");
+              it.print(315, 87, id(faw_24), my_red, TextAlign::TOP_RIGHT, "${error_icon}");
+            }
+          }
+          else {
+              // Усилия выключены → серый статус
+              it.print(5, 87, id(arial_24), my_gray, TextAlign::TOP_LEFT, "УСИЛИЯ ОТКЛЮЧЕНЫ");
+          }
+
+          // СВЕТОБАРЬЕР
+          if (id(selftest_global) && id(light_barrier_switch).state) {
+            // Тест пройден, светобарьер включен → зелёный статус
+            it.print(5, 117, id(arial_24), my_green, TextAlign::TOP_LEFT, "СВЕТОБАРЬЕР ТЕСТ");
+            it.print(315, 117, id(faw_24), my_green, TextAlign::TOP_RIGHT, "${ok_icon}");
+          }
+          else if (!id(selftest_global) && id(light_barrier_switch).state) {
+            // Тест не пройден → красный статус
+            static int i = 0;
+            i++;
+            if ((i % 2) == 0) {
+              it.print(5, 117, id(arial_24), my_red, TextAlign::TOP_LEFT, "СВЕТОБАРЬЕР ОШИБКА");
+              it.print(315, 117, id(faw_24), my_red, TextAlign::TOP_RIGHT, "${error_icon}");
+            }
+          }
+          else {
+            // Световой барьер выключен → серый статус
+            it.print(5, 117, id(arial_24), my_gray, TextAlign::TOP_LEFT, "СВЕТОБАРЬЕР ОТКЛ");
+          }
+
+          it.printf(3, 147, id(arial_14), my_blue, TextAlign::TOP_LEFT, "Геркон-коррекция: %s", id(gercon_open_correction).state ? "ON" : "OFF");
+          it.printf(3, 163, id(arial_14), my_blue, TextAlign::TOP_LEFT, "Откат от помехи: %s", id(rollback_effort).state ? "ON" : "OFF");
+          it.printf(3, 179, id(arial_14), my_blue, TextAlign::TOP_LEFT, "MAX шагов открытия: %d", id(endstop));
+          it.printf(3, 195, id(arial_14), my_blue, TextAlign::TOP_LEFT, "Положение энкодера: %.0f", id(my_encoder).state);
+          it.printf(195, 147, id(arial_14), my_blue, TextAlign::TOP_LEFT, "Таймаут: %.0fсек", id(timeout_seconds).state);
+          it.printf(195, 163, id(arial_14), my_blue, TextAlign::TOP_LEFT, "Напряжение: %.1fV", id(motor_voltage).state);
+          it.printf(195, 179, id(arial_14), my_blue, TextAlign::TOP_LEFT, "MAX ток: %.1fA", id(max_current).state);
+          it.printf(195, 195, id(arial_14), my_blue, TextAlign::TOP_LEFT, "Текущий ток: %.1fA", id(motor_current).state);
+
+          //it.printf(110, 210, id(arial_24), my_blue, TextAlign::TOP_LEFT, "uptime: %s", id(uptime_human).state.c_str());
+          it.print(2, 214, id(mdi_24), my_siren, TextAlign::TOP_LEFT, "${arrow_expand_horizontal_icon}"); // open
+          it.print(70, 214, id(mdi_24), my_siren, TextAlign::TOP_LEFT, "${arrow_collapse_horizontal_icon}"); // close
+          it.print(150, 214, id(mdi_24), my_siren, TextAlign::TOP_LEFT, "${repeat_icon}"); // one_button
+          it.print(230, 214, id(mdi_24), my_siren, TextAlign::TOP_LEFT, "${setting_icon}"); // setting
+          it.print(319, 214, id(mdi_24), my_siren, TextAlign::TOP_RIGHT, "${remote_icon}"); // remote
+      - id: setting_page 
+        lambda: |-
+          it.print(5, 3, id(arial_14), my_yellow, TextAlign::TOP_LEFT, "SLIDING GATES PARUS V1");
+          it.strftime(185, 3, id(arial_14), my_green, TextAlign::TOP_LEFT, "%H:%M:%S", id(homeassistant_time).now());
+          it.printf(310, 3, id(arial_14), TextAlign::TOP_RIGHT, "WIFI %.0f%%", id(wifi_signal_percent).state);
+          it.line(0, 20, it.get_width(), 20, my_orange); // линия 1 над строкой состояния ворот
+          it.line(0, 55, it.get_width(), 55, my_orange); // линия 2
+          it.line(0, 85, it.get_width(), 85, my_orange); // линия 3
+          it.line(0, 115, it.get_width(), 115, my_orange); // линия 4
+          it.line(0, 145, it.get_width(), 145, my_orange); // линия 5
+          it.line(0, 175, it.get_width(), 175, my_orange); // линия 6
+          it.line(0, 210, it.get_width(), 210, my_orange); // линия 5
+          it.rectangle(0,  0, it.get_width(), it.get_height(), id(my_orange)); // рамка по периметру
+          it.print(20, 24, id(arial_24), my_green, TextAlign::TOP_LEFT, "СТРАНИЦА НАСТРОЕК");
+          it.print(5, 57, id(arial_24), my_green, TextAlign::TOP_LEFT, "Сброс ошибок");
+          it.print(5, 87, id(arial_24), my_green, TextAlign::TOP_LEFT, "Обучение передвижению");
+          it.print(5, 117, id(arial_24), my_green, TextAlign::TOP_LEFT, "Калибровка усилий");
+          it.print(5, 147, id(arial_24), my_green, TextAlign::TOP_LEFT, "Меню прочих настроек");
+          it.print(5, 177, id(arial_24), my_green, TextAlign::TOP_LEFT, "Внесение/сброс пульта");
+          //it.print(2, 210, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${back_icon}"); // back
+          //it.print(2, 210, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${back_icon}"); // back
+          it.print(318, 57, id(faw_24), my_siren, TextAlign::TOP_RIGHT, "${reset_icon}"); // reset
+          it.print(70, 210, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${reset_icon}"); // reset
+          it.print(318, 117, id(faw_24), my_siren, TextAlign::TOP_RIGHT, "${effort_icon}"); // effort
+          it.print(150, 210, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${effort_icon}"); // effort
+          it.print(318, 87, id(faw_24), my_siren, TextAlign::TOP_RIGHT, "${movement_icon}"); // movement
+          it.print(230, 210, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${movement_icon}"); // movement
+          it.print(319, 177, id(mdi_24), my_siren, TextAlign::TOP_RIGHT, "${remote_icon}"); // remote
+          it.print(319, 214, id(mdi_24), my_siren, TextAlign::TOP_RIGHT, "${remote_icon}"); // remote
+          it.print(318, 147, id(faw_24), my_siren, TextAlign::TOP_RIGHT, "${menu_icon}"); // menu
+          it.print(2, 210, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${menu_icon}"); // menu
+      - id: movement_page 
+        lambda: |-
+          it.print(5, 3, id(arial_14), my_yellow, TextAlign::TOP_LEFT, "SLIDING GATES PARUS V1");
+          it.printf(310, 3, id(arial_14), TextAlign::TOP_RIGHT, "WIFI %.0f%%", id(wifi_signal_percent).state);
+          it.line(0, 20, it.get_width(), 20, my_orange); // линия 1
+          it.line(0, 50, it.get_width(), 50, my_orange); // линия 2
+          it.line(0, 210, it.get_width(), 210, my_orange); // линия 6
+          it.rectangle(0,  0, it.get_width(), it.get_height(), id(my_orange)); // рамка по периметру
+          it.print(20, 22, id(arial_24), my_green, TextAlign::TOP_LEFT, "ОБУЧЕНИЕ ПРЕДЕЛОВ");
+          it.print(5, 51, id(arial_18), my_green, TextAlign::TOP_LEFT, "1. Убедитесь, что ворота не закрыты");
+          it.print(5, 71, id(arial_18), my_green, TextAlign::TOP_LEFT, "или геркон настроен на закрытие.");
+          it.print(5, 91, id(arial_18), my_green, TextAlign::TOP_LEFT, "2. Нажмите кнопку         и ожидайте,");
+          it.print(5, 111, id(arial_18), my_green, TextAlign::TOP_LEFT, "пока ворота полностью закроются.");
+          it.print(5, 131, id(arial_18), my_green, TextAlign::TOP_LEFT, "3. Нажмите кнопку         и ожидайте,");
+          it.print(5, 151, id(arial_18), my_green, TextAlign::TOP_LEFT, "пока ворота полностью откроются.");
+          it.print(5, 171, id(arial_18), my_green, TextAlign::TOP_LEFT, "4. Нажмите кнопку       когда открыто.");
+          it.print(30, 191, id(arial_18), my_green, TextAlign::TOP_LEFT, "ОБУЧЕНИЕ ЗАВЕРШЕНО");
+          it.print(165, 91, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${movement_icon}"); // movement
+          it.print(165, 131, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${movement_icon}"); // movement
+          it.print(165, 171, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${movement_icon}"); // movement
+          it.print(230, 210, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${movement_icon}"); // movement
+          it.print(2, 210, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${back_icon}"); // back
+          it.printf(60, 212, id(arial_18), my_blue, TextAlign::TOP_LEFT, "Энкодер: %.0f", id(my_encoder).state);
+      - id: menu_page
+        lambda: |-
+          const auto display_width = it.get_width();
+          const auto display_height = it.get_height();
+          auto half_display_width = (int)(display_width / 2.0f);
+
+          // This will render the menu to the right half of the screen leaving the left half for other drawing purposes
+          // Arguments: it.menu(x, y, menu, width, height);
+          it.menu(2, 2, id(my_menu), (it.get_width() - 2), (it.get_height()-35));
+
+          it.rectangle(0,  0, it.get_width(), it.get_height(), id(my_orange)); // рамка по периметру
+          it.line(0, 210, it.get_width(), 210, my_orange); // линия 5
+          it.print(2, 210, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${up_arrow_icon}"); // up
+          it.print(70, 210, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${check_icon}"); // check
+          it.print(150, 210, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${down_arrow_icon}"); // down
+          //it.print(230, 210, id(faw_24), my_siren, TextAlign::TOP_LEFT, "${movement_icon}"); // movement
+          it.print(319, 214, id(mdi_24), my_siren, TextAlign::TOP_RIGHT, "${remote_icon}"); // remote
+
+graphical_display_menu:
+  id: my_menu
+#  display: my_display
+  # Optional: For displays that use `update_interval: never` this provides a trigger when redraw would have fired
+  on_redraw:
+    then:
+      component.update: my_display
+  font: arial_20
+  foreground_color: my_green
+  active: false
+#  active: true
+  mode: rotary
+  items:
+    - type: command
+      text: 'Выход из меню'
+      on_value:
+        then:
+          - display.page.show: main_page
+          - display_menu.hide: my_menu
+    - type: switch
+      immediate_edit: false
+      text: 'Режим Авто/Вручную'
+      on_text: 'Вкл'
+      off_text: 'Выкл'
+      switch: auto_gate
+      on_enter:
+        then:
+          lambda: |-
+            id(auto_gate).toggle();
+            ESP_LOGI("my_menu", "switch enter: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());
+      on_leave:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch leave: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_value:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch value: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+    - type: switch
+      immediate_edit: false
+      text: 'Коррекция открытия'
+      on_text: 'Вкл'
+      off_text: 'Выкл'
+      switch: gercon_open_correction
+      on_enter:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch enter: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_leave:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch leave: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_value:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch value: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+    - type: switch
+      immediate_edit: false
+      text: 'Коррекция закрытия'
+      on_text: 'Вкл'
+      off_text: 'Выкл'
+      switch: gercon_close_correction
+      on_enter:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch enter: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_leave:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch leave: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_value:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch value: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+    - type: switch
+      immediate_edit: false
+      text: 'Усилия Вкл/Выкл'
+      on_text: 'Вкл'
+      off_text: 'Выкл'
+      switch: effort_limit_switch
+      on_enter:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch enter: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_leave:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch leave: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_value:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch value: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+    - type: switch
+      immediate_edit: false
+      text: 'Откат (при усилии)'
+      on_text: 'Вкл'
+      off_text: 'Выкл'
+      switch: rollback_effort
+      on_enter:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch enter: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_leave:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch leave: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_value:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch value: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+    - type: switch
+      immediate_edit: false
+      text: 'Светобарьер Вкл/Выкл'
+      on_text: 'Вкл'
+      off_text: 'Выкл'
+      switch: light_barrier_switch
+      on_enter:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch enter: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_leave:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch leave: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_value:
+        then:
+          lambda: 'ESP_LOGI("my_menu", "switch value: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+    - type: number
+      text: 'Максимальный ток усилий'
+      format: '%.1f'
+      number: max_current
+      on_enter:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number enter: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_leave:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number leave: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_value:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number value: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+    - type: number
+      text: 'Ток порога запуска мотора'
+      format: '%.1f'
+      number: start_current_threshold
+      on_enter:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number enter: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_leave:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number leave: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_value:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number value: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+    - type: number
+      text: 'Таймаут ошибки при движении'
+      format: '%.0f'
+      number: timeout_seconds
+      on_enter:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number enter: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_leave:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number leave: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_value:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number value: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+    - type: number
+      text: 'Открытие пешехода %'
+      format: '%.0f'
+      number: walk_open
+      immediate_edit: true
+      on_enter:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number enter: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_leave:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number leave: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_value:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number value: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+    - type: number
+      text: 'Конечное положение'
+      format: '%.0f'
+      number: encoder_value
+      on_enter:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number enter: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_leave:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number leave: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+      on_value:
+        then:
+          lambda: 'ESP_LOGI("display_menu", "number value: %s, %s", it->get_text().c_str(), it->get_value_text().c_str());'
+    - type: command
+      text: 'Выход из меню'
+      on_value:
+        then:
+          - display.page.show: main_page
+          - display_menu.hide: my_menu
+cover:
+  - platform: template
+    name: "Gate"
+    id: gate
+    open_action:
+      then:
+        - if:
+            condition:
+              lambda: 'return (!id(gerkon).state && id(my_encoder).state < int(id(endstop)));'
+            then:
+              - logger.log:
+                  format: "Движение к конечной точке: %d"
+                  args: [ 'id(endstop)' ]
+              - fan.turn_on:
+                  id: motor
+                  speed: 1
+                  direction: reverse # либо forward, либо reverse
+              - delay: 100ms
+              - fan.turn_on:
+                  id: motor
+                  speed: 3
+                  direction: reverse # либо forward, либо reverse
+              - lambda: |-
+                  id(last_direction) = 0;
+              - cover.template.publish:
+                  id: gate
+                  position: !lambda 'return (float(float(id(gate_position_global)) / float(id(endstop))));' 
+                  current_operation: OPENING
+#              - wait_until: # Ждать достижения конечной точки
+#                  lambda: 'return ((id(gate_position_global) + 40) == id(endstop) || id(gerkon).state);'
+              - while:
+                  condition:
+                    lambda: 'return ((id(my_encoder).state +40) < id(endstop) || id(gerkon).state);'
+                  then:
+                    - cover.template.publish:
+                        id: gate
+                        position: !lambda 'return float(id(my_encoder).state) / float(id(endstop));'
+                        current_operation: OPENING
+                    - delay: 500ms
+              - fan.turn_on:
+                  id: motor
+                  speed: 2
+                  direction: reverse # либо forward, либо reverse
+              - wait_until: # Ждать достижения конечной точки
+                  lambda: 'return ((id(gate_position_global) + 1) >= id(endstop) || id(gerkon).state);'
+              - fan.turn_off: motor
+              - globals.set: # Установить состояние в ОТКРЫТО (нет необходимости в режиме оптимистичного обновления)
+                  id: openclosed
+                  value: '1'
+              - cover.template.publish:
+                  id: gate
+                  state: OPEN 
+                  current_operation: IDLE
+              - lambda: |-
+                  id(gate_position_global_control).publish_state(id(gate_position_global));
+              - component.update: gate_position_sensor
+    close_action:
+      then:
+        - if:
+            condition:
+              - lambda: 'return (id(light_barrier).state && id(light_barrier_switch).state) || (!id(light_barrier).state && !id(light_barrier_switch).state);'
+            then:        
+              - logger.log:
+                  format: "Закрытие, Движение к конечной точке: %d"
+                  args: [ '0' ]
+              - fan.turn_on:
+                  id: motor
+                  speed: 1
+                  direction: forward # либо forward, либо reverse
+              - delay: 100ms
+              - fan.turn_on:
+                  id: motor
+                  speed: 3
+                  direction: forward # либо forward, либо reverse
+              - lambda: |-
+                  id(last_direction) = 1;
+              - cover.template.publish:
+                  id: gate
+                  position: !lambda 'return (float(float(id(gate_position_global)) / float(id(endstop))));' 
+                  current_operation: CLOSING
+#        - wait_until: # Ждать достижения позиции 0
+#            lambda: 'return id(gate_position_global) == 20;'
+              - while:
+                  condition:
+                    lambda: 'return id(gate_position_global) > 40;'
+                  then:
+                    - cover.template.publish:
+                        id: gate
+                        position: !lambda 'return float(id(my_encoder).state) / float(id(endstop));'
+                        current_operation: CLOSING
+                    - delay: 500ms
+              - fan.turn_on:
+                  id: motor
+                  speed: 2
+                  direction: forward # либо forward, либо reverse
+              - wait_until: # Ждать достижения позиции 0
+#            lambda: 'return id(gate_position_global) == 0;'
+                  lambda: 'return id(my_encoder).state == 0;'
+              - fan.turn_off: motor
+              - globals.set: # Установить состояние в ЗАКРЫТО (нет необходимости в режиме оптимистичного обновления)
+                  id: openclosed
+                  value: '0'
+              - cover.template.publish:
+                  id: gate
+                  state: CLOSED
+                  current_operation: IDLE
+            else:
+              - rtttl.play: '${siren}'  
+    #    - lambda: |-
+    #        id(gate_position_global_control).publish_state(id(gate_position_global));
+    #    - component.update: gate_position_sensor
+    position_action:
+      then:
+    # Если текущая позиция меньше целевой — открываем
+        - if:
+            condition:
+              lambda: 'return (id(my_encoder).state + 5) < (int(id(endstop) * pos));'
+            then:
+              - logger.log:
+                  format: "Открытие. Движение к конечной точке: %d"
+                  args: [ 'int(id(endstop) * pos)' ]
+              - fan.turn_on:
+                  id: motor
+                  speed: 1
+                  direction: reverse # либо forward, либо reverse
+              - delay: 100ms
+              - fan.turn_on:
+                  id: motor
+                  speed: 3
+                  direction: REVERSE
+              - lambda: |-
+                  id(last_direction) = 0;
+              - cover.template.publish:
+                  id: gate
+                  current_operation: OPENING
+#              - wait_until: # Ждать достижения позиции 0
+#                  lambda: 'return (id(my_encoder).state +40) > (int(id(endstop) * pos));'
+              # Цикл движения с обновлением позиции
+              - while:
+                  condition:
+                    lambda: 'return (id(my_encoder).state +40) < (int(id(endstop) * pos));'
+                  then:
+                    - cover.template.publish:
+                        id: gate
+                        position: !lambda 'return float(id(my_encoder).state) / float(id(endstop));'
+                        current_operation: OPENING
+                    - delay: 500ms
+              - fan.turn_on:
+                  id: motor
+                  speed: 2
+                  direction: REVERSE
+              - wait_until: # Ждать достижения позиции 0
+                  lambda: 'return id(my_encoder).state > (int(id(endstop) * pos));'
+#              - cover.template.publish:
+#                  id: gate
+#                  position: !lambda 'return float(id(my_encoder).state) / float(id(endstop));'
+#                  current_operation: OPENING
+#              - fan.turn_off: motor
+              - lambda: |-
+                  id(gate)->make_call().set_command_stop().perform();
+                  //id(gate_position_global_control).publish_state(id(gate_position_global));
+                  //id(gate).publish_state(float(id(my_encoder).state) / float(id(endstop)));
+#              - delay: 500ms
+#              - cover.template.publish:
+#                  id: gate
+#                  state: !lambda 'return float(id(my_encoder).state) / float(id(endstop));'
+#              - component.update: gate_position_sensor
+        # Если текущая позиция больше целевой — закрываем
+        - if:
+            condition:
+              lambda: 'return (id(my_encoder).state - 5) > (int(id(endstop) * pos));'
+            then:
+              - logger.log:
+                  format: "Закрытие. Движение к конечной точке: %d"
+                  args: [ 'int(id(endstop) * pos)' ]
+              - fan.turn_on:
+                  id: motor
+                  speed: 1
+                  direction: forward # либо forward, либо reverse
+              - delay: 100ms
+              - fan.turn_on:
+                  id: motor
+                  speed: 3
+                  direction: FORWARD
+              - lambda: |-
+                  id(last_direction) = 1;
+              - cover.template.publish:
+                  id: gate
+                  current_operation: CLOSING
+              # Цикл движения с обновлением позиции
+              - while:
+                  condition:
+                    lambda: 'return (id(my_encoder).state - 40) > (int(id(endstop) * pos));'
+                  then:
+                    - cover.template.publish:
+                        id: gate
+                        position: !lambda 'return float(id(my_encoder).state) / float(id(endstop));'
+                        current_operation: CLOSING
+                    - delay: 500ms
+              - fan.turn_on:
+                  id: motor
+                  speed: 2
+                  direction: FORWARD
+              # Цикл движения с обновлением позиции
+              - while:
+                  condition:
+                    lambda: 'return id(my_encoder).state > (int(id(endstop) * pos));'
+                  then:
+                    - cover.template.publish:
+                        id: gate
+                        position: !lambda 'return float(id(my_encoder).state) / float(id(endstop));'
+                        current_operation: CLOSING
+                    - delay: 500ms
+#              - fan.turn_off: motor
+              - lambda: |-
+                  id(gate)->make_call().set_command_stop().perform();
+                  //id(gate_position_global_control).publish_state(id(gate_position_global));
+                  //id(gate).publish_state(float(id(my_encoder).state) / float(id(endstop)));
+#              - delay: 500ms
+#              - cover.template.publish:
+#                  id: gate
+#                  state: !lambda 'return float(id(my_encoder).state) / float(id(endstop));'
+#              - component.update: gate_position_sensor
+#        - number.set:
+#            id: gate_position_slider
+#            value: !lambda 'return float(id(my_encoder).state) / float(id(endstop)) * 100.0;'
+#            value: !lambda 'return static_cast<int>((float(id(my_encoder).state) / float(id(endstop))) * 100.0);'
+    stop_action:
+      then:
+    # После завершения движения — фиксируем позицию
+
+#        - wait_until: # Ждать достижения позиции
+#            lambda: 'return id(my_gate).current_position == (int(id(endstop) * pos));'
+#        - globals.set: # Установить глобальную переменную текущей позиции
+#            id: gate_position_global
+#            value: !lambda return id(my_gate).current_position; 
+#        - cover.template.publish:
+#            id: gate
+#            position: !lambda 'return (float(float(id(my_gate).current_position) / float(id(endstop))));' 
+#            current_operation: IDLE
+#        - number.set:
+#            id: blind_position_slider
+#            value: !lambda 'return float(id(my_gate).current_position) / float(id(endstop)) * 100.0;' 
+        - fan.turn_on:
+            id: motor
+            speed: 1
+        - delay: 100ms
+        - fan.turn_off: motor
+        - cover.template.publish:
+            id: gate
+            position: !lambda 'return (float(float(id(my_encoder).state) / float(id(endstop))));' 
+            current_operation: IDLE
+#        - number.set:
+#            id: gate_position_slider
+#            value: !lambda 'return float(id(my_encoder).state) / float(id(endstop)) * 100.0;'
+        - lambda: |-
+            id(gate_position_global_control).publish_state(id(gate_position_global));
+#        - delay: 500ms
+#        - cover.template.publish:
+#            id: gate
+#            state: !lambda 'return float(id(my_encoder).state) / float(id(endstop));'
+        - component.update: gate_position_sensor
+    has_position: true
+    device_class: gate
+sensor:
+  - platform: rotary_encoder
+    name: "Encoder"
+    id: my_encoder
+    pin_a: 
+      number: ${encoder_pin_a}
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    pin_b:
+      number: ${encoder_pin_b}
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    min_value: 0
+    max_value: 100000
+    resolution: 1
+    publish_initial_value: true
+#    restore_mode: ALWAYS_ZERO # RESTORE_DEFAULT_ZERO
+    on_value: 
+      then:
+        - globals.set: # Установить глобальную переменную текущей позиции
+            id: gate_position_global
+            value: !lambda return x; 
+
+  - platform: debug
+    free:
+      name: "Heap Free"
+    block:
+      name: "Heap Max Block"
+    loop_time:
+      name: "Loop Time"
+  - platform: template
+    name: "Gate Position Sensor"
+    id: gate_position_sensor
+    icon: mdi:label-percent-outline
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    update_interval: 60s
+    filters: 
+      - round: 0
+    lambda: |-
+      // Возвращаем текущее значение позиции
+      return float(id(my_encoder).state) / float(id(endstop)) * 100.0;
+  - platform: template
+    name: "Gate Position Glogal"
+    id: gate_position_global_control
+    unit_of_measurement: "steps"
+    accuracy_decimals: 0
+    update_interval: 60s
+    device_class: ""
+    filters: 
+      - round: 0
+    lambda: |-
+      // Возвращаем текущее значение позиции
+      if (id(gate_position_global) == 0) return 0;
+      return (int)(float(id(gate_position_global)));  // Явное приведение к int
+  - platform: template
+    name: "Endstop Sensor"  
+    id: endstop_sensor_test
+    icon: mdi:ray-end
+    update_interval: never # Обновление только вручную (через скрипт)
+    unit_of_measurement: "steps"
+    accuracy_decimals: 0
+    device_class: ""
+    filters:
+      - round: 0
+    lambda: |-
+      // Возвращаем текущее значение позиции
+      if (id(endstop) == 0) return 0;
+      return (int)(id(endstop));
+  - platform: ina226
+    address: 0x44 # из-за конфликта с htu-21 изменил адрес с 0x40 подтяжкой А0 к VS
+    i2c_id: bus_a
+    shunt_resistance: 0.01 ohm
+    max_current: 20A
+    adc_time: 140us
+    adc_averaging: 128
+    bus_voltage:
+      name: "Motor Voltage"
+      id: motor_voltage
+      filters:
+        - delta: 0.05  # Обновляем значение, если изменение больше 0.05V
+    update_interval: 200ms # Уменьшил для более частых триггеров on_value (было 2s)
+    current:
+      name: "Motor Current"
+      id: motor_current
+      filters:
+        - delta: 0.05  # Обновляем значение, если изменение больше 0.05A
+      on_value:
+        - lambda: |-
+            float current = fabs(x); // x - текущее значение сенсора (A)
+            float threshold = id(start_current_threshold).state;
+            if (current > threshold && !id(motor_running) && !id(effort_calibration_running) && id(effort_limit_switch).state) {
+              // Мотор начал движение и ограничение усилий включено
+              id(motor_running) = true;
+              id(last_movement_start) = millis();
+              id(safety_triggered) = false;
+              ESP_LOGI("safety", "Motor started (current: %.3f A), safety check started", current);
+              id(safety_script).execute();
+            } else if (current <= threshold && id(motor_running)) {
+              // Мотор остановился
+              id(motor_running) = false;
+              ESP_LOGI("safety", "Motor stopped (current: %.3f A), safety check stopped", current);
+              id(safety_script).stop();
+            }
+
+  - platform: htu21d
+    model: htu21d
+#    i2c_id: bus_a
+    temperature:
+      name: "Temperature"
+      filters:
+        - round: 0
+    humidity:
+      name: "Humidity"
+      filters:
+        - round: 0
+        - lambda: |-
+            float MIN_VALUE = 1.0;
+            float MAX_VALUE = 100.0;
+            if (x < MIN_VALUE) return MIN_VALUE;
+            if (x > MAX_VALUE) return MAX_VALUE;
+            return x;
+debug:
+  update_interval: 60s
+
+number:
+  - platform: template
+    name: "Manual Endstop"
+    id: encoder_value
+    min_value: 0
+    max_value: 100000
+    step: 1
+    optimistic: true
+    restore_value: true
+    set_action:
+      - lambda: |-
+          id(endstop) = (int) x;
+          ESP_LOGI("custom", "Number set to %d", id(endstop));
+          id(endstop_sensor_test).publish_state(x);
+#      - text_sensor.template.publish:
+#          id: endstop_sensor
+#          state: !lambda 'return std::to_string(id(endstop));'
+  - platform: template
+    name: "Walk Open"
+    id: walk_open
+    icon: mdi:label-percent-outline
+    unit_of_measurement: "%"
+    min_value: 0
+    max_value: 100
+    step: 1
+    optimistic: true
+    restore_value: true
+#  - platform: template
+#    name: "Gate Position"
+#    id: gate_position_slider
+#    icon: mdi:label-percent-outline
+#    unit_of_measurement: "%"
+#    min_value: 0
+#    max_value: 100
+#    step: 1
+#    optimistic: true
+#    lambda: |- // Не устанавливать!будут зависания и глюки!
+#      return static_cast<int>((float(id(my_encoder).state) / float(id(endstop))) * 100.0);
+#    set_action:  # <-- Добавьте пустой set_action
+#      then:
+#        - cover.control:
+#            id: gate
+#            position: !lambda 'return x /100;'
+
+#        - lambda: |-
+  - platform: template
+    name: "Motor Speed"
+    icon: mdi:speedometer
+    id: motor_speed
+    optimistic: true
+#    mode: box
+    restore_value: true
+    min_value: 0
+    max_value: 3
+    step: 1
+  - platform: template
+    name: "Max Current (A)"
+    id: max_current
+    icon: mdi:flash-alert
+    optimistic: true
+    min_value: 0.0
+    max_value: 10 # Подстройте под ваш мотор
+    step: 0.1
+    mode: box
+    initial_value: 3.0 # Начальное значение
+    unit_of_measurement: "A"
+    restore_value: true
+    set_action:
+      then:
+        - globals.set:
+            id: max_current_internal
+            value: !lambda 'return x;'
+  - platform: template
+    name: "Timeout (seconds)"
+    id: timeout_seconds
+    icon: mdi:timer-alert-outline
+    optimistic: true
+    min_value: 10.0
+    max_value: 60.0 # Максимум 1 минут
+    step: 1.0
+    mode: box
+    initial_value: 60.0 # Начальное значение
+    restore_value: true
+  # Ток порога запуска:
+  - platform: template
+    name: "Start Current (A)"
+    id: start_current_threshold
+    icon: mdi:current-dc
+    optimistic: true
+    min_value: 0
+    max_value: 3
+    step: 0.1
+    mode: box
+    initial_value: 0.5 # Порог для запуска (настрой под idle-ток мотора)
+    unit_of_measurement: "А"
+    restore_value: true
+datetime:
+  - platform: template
+    id: gate_open
+    type: time
+    web_server:
+      sorting_group_id: sorting_group_time_sun
+    name: "Gate Open"
+    icon: "mdi:clock-check-outline"
+    optimistic: true
+    initial_value: "00:00:00"
+    restore_value: true
+    on_time:
+      - if:
+          condition:
+            - lambda: |-
+                // Проверяем, что время НЕ "00:00:00"
+                if (id(gate_open).hour == 0 && id(gate_open).minute == 0) {
+                  return false;  // Не выполнять
+                }
+                // Остальные условия (как было)
+                return (id(gate).position != COVER_OPEN && id(auto_gate).state);
+          then:
+            - cover.open: gate
+  - platform: template
+    id: gate_close
+    type: time
+    web_server:
+      sorting_group_id: sorting_group_time_sun
+    name: "GateClose"
+    icon: "mdi:clock-check-outline"
+    optimistic: true
+    initial_value: "22:00:00"
+    restore_value: true
+    on_time:
+      - if:
+          condition:
+            - lambda: 'return !id(gate).position == COVER_CLOSED && id(auto_gate).state;'
+          then:
+            - cover.close: gate
+switch:
+  - platform: gpio
+    name: "Relay Lamp"
+    icon: mdi:power-cycle
+    id: relay_lamp_movement
+    pin:
+      number: ${relay_lamp_pin}
+      inverted: false
+      mode:
+        output: true
+    restore_mode: ALWAYS_OFF
+  - platform: gpio
+    name: "Light Barrier Switch"
+    icon: mdi:camera-switch
+    id: light_barrier_switch
+    pin:
+      number: ${light_barrier_switch_pin}
+      inverted: false
+      mode:
+        output: true
+    restore_mode: RESTORE_DEFAULT_ON
+#    restore_mode: ALWAYS_ON
+  - platform: template # Виртуальный выключатель отчета о движении
+    name: 'Report'
+    icon: mdi:chart-gantt
+    optimistic: true
+    id: report
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: template # Управление воротами авто по времени (открыть, только если не 00:00:00)
+    name: 'Auto Gate'
+    icon: mdi:auto-mode
+    optimistic: true
+    id: auto_gate
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: template
+    name: Setup Switch # Переключатель для входа в режим настройки
+    icon: mdi:cogs
+    id: setup_switch
+    lambda: |-
+      if (id(settingmode) != 0) {
+        return true;
+      } else {
+        return false;
+      }
+    turn_on_action:
+      then:
+        - logger.log: "Вход в режим настройки"
+        - globals.set:
+            id: settingmode
+            value:  '1'
+    turn_off_action:
+      then:
+        - logger.log: "Выход из режима настройки"
+        - globals.set:
+            id: settingmode
+            value:  '0'
+    restore_mode: ALWAYS_OFF
+  - platform: template
+    name: "Gercon Open Correction"
+    id: gercon_open_correction
+    optimistic: true
+    icon: mdi:electric-switch
+    restore_mode: ALWAYS_OFF
+  - platform: template
+    name: "Gercon Close Correction"
+    id: gercon_close_correction
+    optimistic: true
+    icon: mdi:electric-switch
+    restore_mode: ALWAYS_OFF
+# Включение - работа с ограничением усилий
+  - platform: template
+    name: "Effort Limit"
+    id: effort_limit_switch
+    optimistic: true
+#    icon: mdi:electric-switch
+    restore_mode: RESTORE_DEFAULT_OFF
+# Включение - откат после ограничения усилий
+  - platform: template
+    name: "Rollback (Effort)"
+    id: rollback_effort
+    optimistic: true
+    icon: mdi:arrow-collapse-left
+    restore_mode: RESTORE_DEFAULT_OFF
+    
+rtttl:
+  output: rtttl_out
+output:
+  - platform: ledc # Подсветка дисплея
+    pin: ${backlight_pin}
+    id: backlight_pwm
+  - platform: ledc
+    pin: ${rtttl_pin}
+    inverted: false
+    id: rtttl_out
+  - platform: ledc
+    frequency: 25000Hz
+    pin: ${motor_for_pin}
+    id: motor_forward_pin
+  - platform: ledc
+    frequency: 25000Hz
+    pin: ${motor_rev_pin}
+    id: motor_reverse_pin
+  - platform: ledc
+    frequency: 20000Hz
+    pin: ${motor_en_pin}
+    id: motor_enable_pin
+
+light:
+  - platform: monochromatic
+    output: backlight_pwm  #  Подсветка дисплея
+    name: "Display Backlight"
+    id: back_light
+    restore_mode: ALWAYS_OFF 
+#    restore_mode: RESTORE_DEFAULT_Off 
+  - platform: esp32_rmt_led_strip
+    id: state_led
+    rgb_order: GRB
+    chipset: ws2812
+    pin: ${led_status_pin}
+    num_leds: 1
+    name: "Status LED"
+    effects:
+      - pulse:
+          name: "Alarm"
+          transition_length: 500ms
+          update_interval: 1s
+      - pulse:
+          name: "Alert"
+          transition_length: 0.8s
+          update_interval: 0.8s
+          min_brightness: 30%
+          max_brightness: 100%
+
+# Скрипт установки длины роллеты (ОБУЧЕНИЯ)
+script:
+  - id: setup_gate
+    mode: single
+    then:
+      # РЕЖИМ 1: ЗАКРЫТИЕ
+      - if:
+          condition:
+            - lambda: 'return id(settingmode) == 1;'
+          then:
+            - logger.log: "Нажата кнопка настройки: режим 1"
+            - logger.log: "Ворота закрываются, нажмите кнопку, когда они полностью закрыты"
+            - text_sensor.template.publish: # Добавляем запись в текстовый сенсор
+                id: setting_mode
+                state: !lambda 'return "Ворота закрываются, нажмите кнопку когда закрыто";'
+            - fan.turn_on:
+                id: motor
+                speed: 3
+                direction: FORWARD
+            - lambda: |-
+                  id(last_direction) = 1;
+            - globals.set:
+                id: settingmode
+                value: '2'
+            - rtttl.play: '${short}'
+            - script.stop: setup_gate
+      # РЕЖИМ 2: ОТКРЫТИЕ
+      - if:
+          condition:
+            - lambda: 'return id(settingmode) == 2;'
+          then:
+            - logger.log: "Нажата кнопка настройки: режим 2"
+            - logger.log: "Ворота открываются, нажмите кнопку, когда они полностью открыты"
+            - text_sensor.template.publish: # Добавляем запись в текстовый сенсор
+                id: setting_mode
+                state: !lambda 'return "Ворота открываются, нажмите кнопку если открыто";'
+            - fan.turn_on:
+                id: motor
+                speed: 1
+            - delay: 100ms
+            - fan.turn_off: motor
+            - sensor.rotary_encoder.set_value:
+                id: my_encoder
+                value: '0'
+            - globals.set:
+                id: gate_position_global
+                value: '0'
+            - fan.turn_on:
+                id: motor
+                speed: 1
+                direction: REVERSE
+            - lambda: |-
+                id(last_direction) = 0;
+            - delay: 100ms
+            - fan.turn_on:
+                id: motor
+                speed: 3
+                direction: REVERSE
+            - globals.set:
+                id: settingmode
+                value: '3'
+            - rtttl.play: '${short}'
+            - script.stop: setup_gate
+      # РЕЖИМ 3: ЗАВЕРШЕНИЕ
+      - if:
+          condition:
+            - lambda: 'return id(settingmode) == 3;'
+          then:
+            - logger.log: "Нажата кнопка настройки: режим 3"
+            - text_sensor.template.publish: # Добавляем запись в текстовый сенсор
+                id: setting_mode
+                state: !lambda 'return "Ворота настроены";'
+            - logger.log: "НАСТРОЙКА ЗАВЕРШЕНА!"
+            - fan.turn_off: motor
+            - delay: 500ms
+            - globals.set:
+                id: gate_position_global
+                value: !lambda 'return id(my_encoder).state;'     
+            - globals.set:
+                id: endstop
+                value: !lambda 'return id(my_encoder).state;'
+            - lambda: |-
+                id(endstop_sensor_test).publish_state(float(id(endstop)));
+#            - text_sensor.template.publish:
+#                id: endstop_sensor
+#                state: !lambda 'return std::to_string(id(endstop));'
+            - cover.template.publish:
+                id: gate
+                state: OPEN
+                current_operation: IDLE
+            - globals.set: # Установить состояние как ОТКРЫТО
+                id: openclosed
+                value: '1'
+            - globals.set:
+                id: settingmode
+                value: '0'
+            - if:
+                condition:
+                  display.is_displaying_page: movement_page
+                then:
+                  - display.page.show: main_page
+            - rtttl.play: '${success}'
+            - script.stop: setup_gate
+
+# предохранитель
+  - id: safety_script
+#    mode: restart
+    then:
+      - lambda: |-
+          // Проверяем, идёт ли калибровка — если да, выходим
+          if (id(effort_calibration_running)) {
+            ESP_LOGD("safety", "Calibration in progress, skipping safety check");
+            return;
+          }
+      - lambda: |-
+          // Фиксируем время старта проверки в global (один раз при старте скрипта)
+          id(last_movement_start) = millis();
+      - repeat:
+          count: 200 # Максимум 200 итераций (~ 40сек при 200ms delay)
+          then:
+            - delay: 200ms # Проверяем каждые 100 мс
+            - lambda: |-
+                // Проверяем, идёт ли калибровка — если да, выходим
+                if (id(effort_calibration_running)) {
+                  ESP_LOGD("safety", "Calibration in progress, skipping safety check");
+                  return;
+                }
+                if (!id(motor_running)) {
+                  ESP_LOGI("safety", "Motor not running, stopping safety script");
+                  id(safety_script).stop();
+                  return;
+                }
+                float current = fabs(id(motor_current).state);
+                float max_current_val = id(max_current).state;
+                int timeout_ms_val = id(timeout_seconds).state * 1000;
+                uint32_t now = millis();
+                uint32_t elapsed = now - id(last_movement_start);  // Используем global start_time
+                // условия срабатывания
+                bool timeout_reached = elapsed > timeout_ms_val;
+                bool current_high = current > max_current_val;
+
+                // Логи для отладки (чтобы увидеть значения)
+                ESP_LOGD("safety", "Current: %.3f A, max: %.3f A, elapsed: %u ms, timeout_ms: %d, timeout_reached: %s",
+                  current, max_current_val, elapsed, timeout_ms_val, timeout_reached ? "yes" : "no");
+
+                if (current_high) {
+                  // Устанавливаем флаг срабатывания
+                  id(safety_triggered) = true;
+                  ESP_LOGW("safety", "Safety triggered! Current: %.3f A, timeout: %s, turning off supply", current, timeout_reached ? "yes" : "no");
+                  id(motor).turn_off();  // останавливаем мотор
+                  id(gate)->make_call().set_command_stop().perform();
+                  if (id(rollback_effort).state && id(last_direction) == 1) {
+                    id(gate)->make_call().set_command_open().perform();
+                  }
+                  id(effort_limit) = true;
+                  id(safety_script).stop();
+                }
+                if (timeout_reached) {
+                  // Устанавливаем флаг срабатывания
+                  id(timeout_triggered) = true;
+                  ESP_LOGW("safety", "Timeout triggered! Current: %.3f A, timeout: %s, turning off supply", current, timeout_reached ? "yes" : "no");
+                  id(motor).turn_off();  // останавливаем мотор
+                  id(gate)->make_call().set_command_stop().perform();
+                  id(safety_script).stop();
+                }
+# Скрипт самопроверки светобарьера
+  - id: selftest
+    then:
+      - delay: 500ms
+      - if:
+          condition:
+            lambda: 'return (id(light_barrier).state && id(light_barrier_switch).state);'  # Если датчик активен , и светобарьер разрешен
+          then:
+            - switch.turn_off: light_barrier_switch  # Выключаем реле
+            - delay: 500ms
+            - if:
+                condition:
+                  lambda: 'return !id(light_barrier).state;'  # Если датчик отключился
+                then:
+                  - switch.turn_on: light_barrier_switch  # Включаем реле обратно
+                  - delay: 500ms
+                  - if:
+                      condition:
+                        lambda: 'return id(light_barrier).state;'  # Если датчик снова активен
+                      then:
+                        - globals.set:
+                            id: selftest_global
+                            value: 'true'  # Успешный самотест
+                      else:
+                        - globals.set:
+                            id: selftest_global
+                            value: 'false'  # Ошибка: датчик не вернулся в активное состояние
+                        - rtttl.play: '${warning}'
+                else:
+                  - globals.set:
+                      id: selftest_global
+                      value: 'false'  # Ошибка: датчик не отключился после выключения реле
+                  - rtttl.play: '${warning}'
+          else:
+            - globals.set:
+                id: selftest_global
+                value: 'false'  # Ошибка: датчик изначально неактивен
+            - rtttl.play: '${warning}'
+# Скрипт калибровки усилий
+  - id: effort_calibration
+    mode: single
+    then:
+      - globals.set:
+          id: effort_calibration_running
+          value: 'true'
+      - delay: 100ms
+      # Останавливаем скрипт защиты перед калибровкой
+      - script.stop: safety_script
+      # Подготовка: устанавливаем флаги и сбрасываем максимальный ток
+      - globals.set:
+          id: effort_limit
+          value: 'false'
+      - globals.set:
+          id: safety_triggered
+          value: 'false'
+      - globals.set:
+          id: max_measured_current
+          value: '0.0'  # Сбрасываем максимальный ток перед калибровкой
+      - delay: 500ms
+      # Этап 1: Закрыть ворота
+
+      # Проверяем, закрыты ли ворота
+      - if:
+          condition:
+            lambda: 'return (id(gate).position == COVER_CLOSED || id(my_encoder).state < 20);'
+          then:
+            - logger.log: "Ворота уже закрыты, пропускаем этап закрытия"
+          else:
+            # Этап 1: Закрыть ворота (если они не закрыты)
+            - cover.close: gate
+            - wait_until:
+                lambda: 'return id(gate).current_operation == COVER_OPERATION_CLOSING;'
+            - while:
+                condition:
+                  lambda: 'return id(gate).current_operation == COVER_OPERATION_CLOSING;'
+                then:
+                  - lambda: |-
+                      static uint32_t last_check = 0;
+                      uint32_t now = millis();
+                      if (now - last_check >= 200) {
+                        last_check = now;
+                        float current = fabs(id(motor_current).state);
+                        ESP_LOGD("calib", "Current: %.3f A, Max measured: %.3f A", current, id(max_measured_current));
+                        if (current > id(max_measured_current)) {
+                          id(max_measured_current) = current;
+                          ESP_LOGD("calib", "New max current: %.3f A", current);
+                        }
+                      }
+                  - delay: 100ms
+            - wait_until:
+                lambda: 'return (id(gate).position == COVER_CLOSED);'
+            - delay: 500ms
+
+      # Этап 2: Открыть ворота
+      - cover.open: gate
+      - wait_until: # Ждём, пока ворота не начнут открываться
+          lambda: 'return id(gate).current_operation == CoverOperation::COVER_OPERATION_OPENING;'
+      - while:
+          condition:
+            lambda: 'return (id(gate).current_operation == CoverOperation::COVER_OPERATION_OPENING);'
+          then:
+            - lambda: |-
+                static uint32_t last_check = 0;
+                uint32_t now = millis();
+                if (now - last_check >= 200) {  // Замеряем ток каждые 200 мс
+                  last_check = now;
+                  float current = fabs(id(motor_current).state);  // Используем модуль тока
+                  ESP_LOGD("calib", "Current: %.3f A, Max measured: %.3f A", current, id(max_measured_current));
+                  if (current > id(max_measured_current)) {
+                    id(max_measured_current) = current;  // Обновляем максимальный ток
+                    ESP_LOGD("calib", "New max current: %.3f A", current);
+                  }
+                }
+            - delay: 100ms  # Задержка, чтобы не нагружать процессор
+      - wait_until:  # Ждём достижения конечной точки
+          lambda: 'return ((id(gate_position_global) + 1) >= id(endstop) || id(gerkon).state);'
+      - delay: 500ms
+      # Этап 3: Снова закрыть
+      - cover.close: gate
+      - wait_until: # Ждём, пока ворота не начнут двигаться
+          lambda: 'return id(gate).current_operation == CoverOperation::COVER_OPERATION_CLOSING;'
+      - while:
+          condition: # Проверяем, движутся ли ворота
+            lambda: 'return id(gate).current_operation == CoverOperation::COVER_OPERATION_CLOSING;'
+          then:
+            - lambda: |-
+                static uint32_t last_check = 0;
+                uint32_t now = millis();
+                if (now - last_check >= 200) {  // Замеряем ток каждые 200 мс
+                  last_check = now;
+                  float current = fabs(id(motor_current).state);  // Используем модуль тока
+                  ESP_LOGD("calib", "Current: %.3f A, Max measured: %.3f A", current, id(max_measured_current));
+                  if (current > id(max_measured_current)) {
+                    id(max_measured_current) = current;  // Обновляем максимальный ток
+                    ESP_LOGD("calib", "New max current: %.3f A", current);
+                  }
+                }
+            - delay: 100ms  # Задержка, чтобы не нагружать процессор
+      - wait_until:  # Ждём, пока ворота не закроются полностью
+          lambda: 'return (id(gate).position == COVER_CLOSED);'
+      - delay: 500ms
+      # Этап 4: Снова открыть
+      - cover.open: gate
+      - wait_until: # Ждём, пока ворота не начнут открываться
+          lambda: 'return id(gate).current_operation == CoverOperation::COVER_OPERATION_OPENING;'
+      - while:
+          condition:
+            lambda: 'return (id(gate).current_operation == CoverOperation::COVER_OPERATION_OPENING);'
+          then:
+            - lambda: |-
+                static uint32_t last_check = 0;
+                uint32_t now = millis();
+                if (now - last_check >= 200) {  // Замеряем ток каждые 200 мс
+                  last_check = now;
+                  float current = fabs(id(motor_current).state);  // Используем модуль тока
+                  ESP_LOGD("calib", "Current: %.3f A, Max measured: %.3f A", current, id(max_measured_current));
+                  if (current > id(max_measured_current)) {
+                    id(max_measured_current) = current;  // Обновляем максимальный ток
+                    ESP_LOGD("calib", "New max current: %.3f A", current);
+                  }
+                }
+            - delay: 100ms  # Задержка, чтобы не нагружать процессор
+      - wait_until:  # Ждём достижения конечной точки
+          lambda: 'return ((id(gate_position_global) + 1) >= id(endstop) || id(gerkon).state);'
+      - delay: 500ms
+      # Рассчитываем новый max_current с запасом 30%
+      - lambda: |-
+          float new_max = id(max_measured_current) * 1.3f;
+          new_max = (int)(new_max * 10 + 0.99) / 10.0f;  // Округление вверх до 0.1
+          id(max_current_internal) = new_max;
+          auto call = id(max_current).make_call();
+          call.set_value(new_max);
+          call.perform();
+          ESP_LOGI("calib", "Calibration done! Max current: %.3f A → New max_current: %.3f A", id(max_measured_current), new_max);
+          ESP_LOGI("startup", "max_current value after calibration: %.3f A", id(max_current).state);
+      # Сброс флагов и завершение
+      - globals.set:
+          id: effort_calibration_running
+          value: 'false'
+      - rtttl.play: '${success}'
+
+binary_sensor:
+  - platform: template
+    name: "Any Button Pressed"
+    id: any_button
+    trigger_on_initial_state: true
+    lambda: |-
+      return (id(settings_button).state 
+          || id(one_touch_control_button).state 
+          || id(open_button).state
+          || id(close_button).state);
+    filters:
+      - delayed_off: 5min
+    on_press: 
+      then:
+        - light.turn_on: back_light
+    on_release: 
+      then:
+        - light.turn_off: back_light
+
+  - platform: gpio
+    pin:
+      number: ${light_barrier_pin} # фотобарьер к gpio и GND
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Light Barrier"
+    icon: mdi:camera-switch-outline
+    id: light_barrier
+    on_release:
+      then:
+        - rtttl.play: '${short}'
+        - if:
+            condition:
+              - lambda: 'return (id(gate).current_operation == CoverOperation::COVER_OPERATION_CLOSING) && id(light_barrier_switch).state;'
+            then:
+              - cover.stop: gate
+              - rtttl.play: '${warning}'
+  - platform: gpio
+    pin:
+      number: ${gerkon_pin} # геркон к gpio и GND
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Gerkon"
+    icon: mdi:electric-switch
+    id: gerkon
+    on_press:
+      then:
+        - rtttl.play: '${short}'
+        - if:
+            condition:
+              - lambda: 'return !id(effort_calibration_running) && (id(gercon_open_correction).state || id(gercon_close_correction).state);'
+            then:
+              - if:
+                  condition:
+                    - lambda: 'return (id(last_direction) == 0) && id(gercon_open_correction).state;'
+                  then:
+                    - logger.log: "Геркон сработал при открытии, коррекция позиции мотора включена"
+                    - cover.stop: gate
+                    - sensor.rotary_encoder.set_value:
+                        id: my_encoder
+                        value: !lambda 'return id(endstop);'
+                    - globals.set:
+                        id: gate_position_global
+                        value: !lambda 'return id(endstop);' 
+                    - cover.template.publish:
+                        id: gate
+                        position: 1.0  # открыто 100%
+                        current_operation: IDLE
+                    - globals.set: # Установить состояние как ОТКРЫТО
+                        id: openclosed
+                        value: '1'
+                  else:
+                    - if:
+                        condition:
+                          - lambda: 'return (id(last_direction) == 1) && id(gercon_close_correction).state;'
+                        then:
+                          - logger.log: "Геркон сработал при закрытии, коррекция позиции мотора включена"
+                          - cover.stop: gate
+                          - sensor.rotary_encoder.set_value:
+                              id: my_encoder
+                              value: !lambda 'return 0;'
+                          - globals.set:
+                              id: gate_position_global
+                              value: !lambda 'return 0;' 
+                          - cover.template.publish:
+                              id: gate
+                              position: 0.0  # открыто 100%
+                              current_operation: IDLE
+                          - globals.set: # Установить состояние как ЗАКРЫТО
+                              id: openclosed
+                              value: '0'
+            else:
+              - if:
+                  condition:
+                    lambda: 'return !id(effort_calibration_running);'
+                  then:
+                    - logger.log: "Геркон сработал,  — стоп мотор"
+                    - cover.stop: gate
+# Кнопка настройки
+  - platform: gpio
+    pin:
+      number: ${settings_button_pin} # кнопка к gpio и GND
+#      mode: INPUT_PULLUP
+      inverted: true
+    name: "Settings Button"
+    id: settings_button
+    icon: mdi:cogs
+    filters:
+      - delayed_on: 20ms # Защита от дребезга
+    on_multi_click:
+    - timing: # Короткое нажатие
+        - ON for at most 1s
+        - OFF for at least 0.5s
+      then:
+        - if:
+            condition:
+               light.is_off: back_light
+            then:
+              - light.turn_on: back_light
+              - display.page.show: main_page
+        - if:
+            condition:  # для перехода на настройки (если на главной странице)
+              - light.is_on: back_light
+              - display.is_displaying_page: main_page
+            then:
+              - rtttl.play: '${short}'
+              - display.page.show: setting_page
+            else:
+              - if:
+                  condition:  # для перехода в обучение (если на странице настройки)
+                    display.is_displaying_page: setting_page
+                  then:
+                    - rtttl.play: '${short}'
+                    - display.page.show: movement_page
+                  else:
+                    - if: # Если на странице обучения и переменная настройки выключена
+                        condition:
+                          - display.is_displaying_page: movement_page
+                          - lambda: 'return id(settingmode) == 0;'
+                        then: # Войти в режим настройки
+                          - rtttl.play: '${short}'
+                          - logger.log: "Вход в режим настройки"
+                          - globals.set:
+                              id: settingmode
+                              value: '1'
+                          - delay: 500ms
+                          - script.execute: setup_gate
+                        else:
+                          - if: # Если переменная настройки включена
+                              condition:
+                                - display.is_displaying_page: movement_page
+                                - lambda: 'return id(settingmode) != 0;'
+                              then: # Исполнение скрипта настройки пределов
+                                - script.execute: setup_gate
+
+  - platform: gpio
+    name: "OneTouchControl Button"
+    id: one_touch_control_button
+    icon: mdi:gesture-tap-button
+    pin:
+      number: ${one_touch_control_button_pin}
+      inverted: true
+    publish_initial_state: true
+    filters:
+      - delayed_on: 50ms
+      - delayed_off: 50ms
+    on_press: 
+      then:
+        - if:
+            condition:
+               light.is_off: back_light
+            then:
+              - light.turn_on: back_light
+              - display.page.show: main_page
+            else:
+              - if:
+                  condition:
+                    - display.is_displaying_page: setting_page
+                  then:
+                    - button.press: effort_test_button
+                    - display.page.show: main_page
+                  else:
+                    - if:
+                        condition:
+                          display.is_displaying_page: menu_page
+                        then:
+                          - display_menu.down: my_menu
+                        else:
+                          - if:
+                              condition:
+                                lambda: 'return !id(effort_calibration_running);'
+                              then:
+                                - rtttl.play: '${short}'
+                                - button.press: one_touch_control
+                                - delay: 10s
+                                - logger.log: "=== OneTouchControl Button ==="
+  - platform: gpio
+    name: "Open Button"
+    id: open_button
+    icon: mdi:arrow-expand-horizontal
+    pin:
+      number: ${open_button_pin}
+      inverted: true
+    publish_initial_state: true
+    filters:
+      - delayed_on: 50ms
+      - delayed_off: 50ms
+    on_press:
+      then:
+        - if:
+            condition:
+               light.is_off: back_light
+            then:
+              - light.turn_on: back_light
+              - display.page.show: main_page
+            else:
+              - if:
+                  condition:
+                    - display.is_displaying_page: movement_page
+                  then:
+                    - display.page.show: main_page
+                  else:
+                    - if:
+                        condition:
+                          - display.is_displaying_page: setting_page
+                          - lambda: 'return (!id(my_menu).is_active());'
+                        then:
+                          - display.page.show: menu_page
+                          - display_menu.show:
+                        else:
+                          - if:
+                              condition:
+                                display.is_displaying_page: menu_page
+                              then:
+                                - display_menu.up: my_menu
+                              else:
+                                - if: # выход со страницы обучения пределам
+                                    condition:
+                                      display.is_displaying_page: movement_page
+                                    then:
+                                      - rtttl.play: '${short}'
+                                      - display.page.show: menu_page
+                                      - script.stop: setup_gate
+                                      - globals.set:
+                                          id: settingmode
+                                          value:  '0'
+                                    else:
+                                      - if:
+                                          condition:
+                                           lambda: 'return !id(effort_calibration_running);'
+                                          then:
+                                            - if: # Если ворота открываются
+                                                condition:
+                                                  - lambda: 'return id(gate).current_operation == CoverOperation::COVER_OPERATION_OPENING;'
+                                                then: # Остановить движение
+                                                  - cover.stop: gate
+                                                else:
+                                                  - rtttl.play: '${short}'
+                                                  - button.press: gate_open_button
+  - platform: gpio
+    name: "Close Button"
+    id: close_button
+    icon: mdi:arrow-collapse-horizontal
+    pin:
+      number: ${close_button_pin}
+      inverted: true
+    publish_initial_state: true
+    filters:
+      - delayed_on: 50ms
+      - delayed_off: 50ms
+    on_press: 
+      then:
+        - if:
+            condition:
+               light.is_off: back_light
+            then:
+              - light.turn_on: back_light
+            else:
+              - if:
+                  condition:
+                    - display.is_displaying_page: setting_page
+                  then:
+                    - button.press: error_reset_button
+                    - display.page.show: main_page
+                  else:
+                    - if:
+                        condition:
+                          - display.is_displaying_page: menu_page
+                          - lambda: 'return (id(my_menu).is_active());'
+                        then:
+                          - display_menu.enter: my_menu
+                        else:
+                          - if:
+                              condition:
+                                lambda: 'return !id(effort_calibration_running);'
+                              then:
+                                - if: # Если ворота закрываются
+                                    condition:
+                                      - lambda: 'return id(gate).current_operation == CoverOperation::COVER_OPERATION_CLOSING;'
+                                    then: # Остановить движение
+                                      - cover.stop: gate
+                                    else:
+                                      - rtttl.play: '${short}'
+                                      - button.press: gate_close_button
+  - platform: template
+    name: "Gate Moving"
+    id: gate_moving
+    icon: mdi:arrow-left-right
+    lambda: |-
+      static float last_position = id(gate).position;
+      static unsigned long last_change_time = 0;
+      float current_position = id(gate).position;
+      unsigned long current_time = id(homeassistant_time).now().timestamp;
+
+      if (current_position != last_position) {
+        last_position = current_position;
+        last_change_time = current_time;
+      }
+      // Если позиция не менялась более 1 секунд, считаем, что cover остановился
+      return (current_time - last_change_time) <= 1;
+    on_press: 
+      then:
+        - while:
+            condition:
+              binary_sensor.is_on: gate_moving
+            then:
+              - lambda: |-
+                  id(relay_lamp_movement).turn_on();
+              - delay: 500ms
+              - lambda: |-
+                  id(relay_lamp_movement).turn_off();
+              - delay: 500ms
+    on_release: 
+      then:
+        - lambda: |-
+            id(relay_lamp_movement).turn_off();
+  - platform: gpio
+    pin:
+      number: ${rf_do_pin} # брелок
+      mode: INPUT_PULLUP
+      inverted: true
+#      allow_other_uses: true
+    name: "One Button Remote"
+    icon: mdi:remote
+    id: one_button_remote
+    filters:
+      - delayed_on: 100ms
+      - delayed_off: 300ms
+    on_press: 
+      then:
+        - rtttl.play: '${short}'
+        - button.press: one_touch_control
+        - delay: 1s
+        - logger.log: "=== One Button Remote Pressed!!==="
+
+  - platform: template
+    name: "Effort Error"
+    id: effort_error
+    icon: mdi:alert
+    lambda: |-
+      if (id(effort_limit)) {
+        return true;  // Есть ошибка
+      } else {
+        return false;   // Ошибки нет
+      }
+    on_press: 
+      then:
+        - light.turn_on: # Индикация ошибки!
+            id: state_led
+            brightness: 50%
+            red: 100%
+            green: 0%
+            blue: 0%
+            effect: "Alarm"
+        - rtttl.play: '${warning}'
+    on_release: 
+      then:
+        - light.turn_on: # Индикация нет ошибок
+            id: state_led
+            brightness: 50%
+            red: 0%
+            green: 100%
+            blue: 0%
+            effect: "None"
+  - platform: template
+    name: "Light Barrier Error"
+    id: light_barrier_error
+    icon: mdi:alert
+    lambda: |-
+      if (!id(selftest_global)) {
+        return true;  // Есть ошибка
+      } else {
+        return false;   // Ошибки нет
+      }
+    on_press: 
+      then:
+        - light.turn_on: # Индикация ошибки!
+            id: state_led
+            brightness: 50%
+            red: 100%
+            green: 0%
+            blue: 0%
+            effect: "Alarm"
+        - rtttl.play: '${warning}'
+    on_release: 
+      then:
+        - light.turn_on: # Индикация нет ошибок
+            id: state_led
+            brightness: 50%
+            red: 0%
+            green: 100%
+            blue: 0%
+            effect: "None"
+  - platform: template
+    name: "Gate Calibration"
+    id: gate_calibration
+    icon: mdi:alert
+    lambda: |-
+      if (id(effort_calibration_running) || (id(settingmode) != 0) ) {
+        return true;  // Есть ошибка
+      } else {
+        return false;   // Ошибки нет
+      }
+    on_press: 
+      then:
+        - light.turn_on: # Индикация калибровки
+            id: state_led
+            brightness: 50%
+            red: 0%
+            green: 100%
+            blue: 0%
+            effect: "Alert"
+    on_release: 
+      then:
+        - light.turn_on: # Индикация нет калибровки
+            id: state_led
+            brightness: 50%
+            red: 0%
+            green: 100%
+            blue: 0%
+            effect: "None"
+              
+  - platform: template
+    name: "Position Limit Error"
+    id: position_limit_error
+    icon: mdi:gate-alert
+    lambda: |-
+      unsigned int pos = id(gate_position_global);
+      unsigned int limit = id(endstop);
+      // Если конечная точка ≤ 10000 И текущая позиция ≤ конечной точки → предел НЕ превышен (ошибка отсутствует)
+      if (limit >= 100 && limit <= 10000 && pos <= (limit +10)) {
+        return false;  // Ошибки нет
+      } else {
+        return true;   // Есть ошибка (выход из диапазона)
+      }
+    on_press: 
+      then:
+        - light.turn_on: # Индикация ошибки!
+            id: state_led
+            brightness: 50%
+            red: 100%
+            green: 0%
+            blue: 0%
+            effect: "Alert"
+        - rtttl.play: '${warning}'
+    on_release: 
+      then:
+        - light.turn_on: # Индикация нет ошибок
+            id: state_led
+            brightness: 50%
+            red: 0%
+            green: 100%
+            blue: 0%
+            effect: "None"
+  - platform: remote_receiver #template
+    id: keychain1
+    name: "Keychain1"
+    icon: mdi:numeric-0-box-multiple-outline
+    rc_switch_raw :
+      code: '010100010101111100110000'
+      protocol: 1
+    filters: 
+      - delayed_off: 
+          0.3s
+  - platform: remote_receiver
+    id: keychain2_1
+    name: "Keychain2_1"
+    icon: mdi:numeric-1-box-multiple-outline
+    rc_switch_raw :
+      code: '010100011100101001100001'
+      protocol: 1
+    filters: 
+      - delayed_off: 
+          0.3s
+    on_press: 
+      then:
+        - rtttl.play: '${short}'
+        - if: # Если ворота открываются
+            condition:
+              - lambda: 'return id(gate).current_operation == CoverOperation::COVER_OPERATION_OPENING;'
+            then: # Остановить движение
+              - cover.stop: gate
+            else:
+             - button.press: gate_open_button
+             - delay: 20s
+             - logger.log: "=== Keychain2_1 ==="
+  - platform: remote_receiver
+    id: keychain2_2
+    name: "Keychain2_2"
+    icon: mdi:numeric-2-box-multiple-outline
+    rc_switch_raw :
+      code: '010100011100101001100010'
+      protocol: 1
+    filters: 
+      - delayed_off: 
+          0.3s
+    on_press: 
+      then:
+        - rtttl.play: '${short}'
+        - if: # Если ворота закрываются
+            condition:
+              - lambda: 'return id(gate).current_operation == CoverOperation::COVER_OPERATION_CLOSING;'
+            then: # Остановить движение
+              - cover.stop: gate
+            else:
+              - button.press: gate_close_button
+  - platform: remote_receiver
+    id: keychain2_3
+    name: "Keychain2_3"
+    icon: mdi:numeric-3-box-multiple-outline
+    rc_switch_raw :
+      code: '010100011100101001100100'
+      protocol: 1
+    filters: 
+      - delayed_off: 
+          0.3s
+    on_press: 
+      then:
+        - delay: 50ms
+        - rtttl.play: '${short}'
+        - lambda: |-
+            id(gate).make_call().set_position(std::clamp(id(walk_open).state, 0.0f, 100.0f) / 100.0f).perform();
+#        - button.press: one_touch_control
+        - delay: 2s
+        - logger.log: "=== Keychain2_3 Walk ==="
+        
+  - platform: remote_receiver
+    id: keychain2_4
+    name: "Keychain2_4"
+    icon: mdi:numeric-4-box-multiple-outline
+    rc_switch_raw :
+      code: '010100011100101001101000'
+      protocol: 1
+    filters: 
+      - delayed_off: 
+          0.2s
+    on_multi_click:
+    - timing: # Тройное нажатие пуска ворот (длинное-короткое-длинное)
+        - ON for 1s to 2s
+        - OFF for at most 1s
+        - ON for 0.2s to 0.5s
+        - OFF for at most 1s
+        - ON for 1s to 5s
+        - OFF for at least 0.2s
+      then:
+        - rtttl.play: '${short}'
+        - button.press: one_touch_control
+        - delay: 20s
+        - logger.log: "=== Keychain2_4 ==="
+button:
+  - platform: template # Открыть
+    id: gate_open_button
+    icon: mdi:arrow-expand-horizontal
+    name: "Gate Open Button"
+    on_press: 
+      then:
+        - if:
+            condition:
+              lambda: 'return !id(effort_calibration_running);'
+            then:
+              - rtttl.play: '${short}'
+              - cover.open: gate
+  - platform: template # Открыть
+    id: gate_close_button
+    icon: mdi:arrow-collapse-horizontal
+    name: "Gate Close Button"
+    on_press: 
+      then:
+        - if:
+            condition:
+              lambda: 'return !id(effort_calibration_running);'
+            then:
+              - rtttl.play: '${short}'
+              - cover.close: gate
+  - platform: template
+    name: "Setup Button" # Программная кнопка для входа в рехим обучения
+    id: ha_setup
+    icon: mdi:window-shutter-settings
+    on_press:
+      - rtttl.play: '${short}'
+      - if: # Если переменная настройки включена
+          condition:
+            - lambda: 'return id(settingmode) != 0;'
+          then: # Войти в режим обучения
+            - script.execute: setup_gate
+  - platform: template
+    name: "OneTouchControl"
+    id: one_touch_control
+    icon: mdi:camera-control
+    on_press: 
+      then:
+        - rtttl.play: '${short}'
+        - if: # Если шторка в движении
+            condition:            
+              - lambda: |-
+                  return (id(gate).current_operation == CoverOperation::COVER_OPERATION_OPENING ||
+                    id(gate).current_operation == CoverOperation::COVER_OPERATION_CLOSING) 
+                    && !id(effort_calibration_running);
+            then: # Остановить движение
+              - cover.stop: gate
+            else:
+              - if:
+                  condition:
+                    lambda: 'return !id(effort_calibration_running);'
+                  then:
+                    - lambda: |-
+                        auto cover = id(gate);
+                        if (cover->current_operation != COVER_OPERATION_IDLE) {
+                          // Если ворота движется → стоп
+                          //cover->make_call().set_speed(1).perform();
+                          cover->make_call().set_command_stop().perform();
+                          id(gate).publish_state(float(id(my_encoder).state) / float(id(endstop))); // Новое
+                        } else {
+                          // Если стоит → открыть или закрыть по предыдущему направлению
+                          if (id(last_direction) == 0) {
+                            // Было открытие → теперь закрыть
+                            cover->make_call().set_command_close().perform();
+                            id(last_direction) = 1; // Переключаем на закрытие для следующего раза
+                          } else {
+                            id(last_direction) = 0; // Переключаем на открытие
+                            if (!id(gerkon).state) {
+                            // Было закрытие → теперь открыть если геркон не сработал
+                            cover->make_call().set_command_open().perform();
+                            }
+                          }
+                        }
+  - platform: template
+    id: selftest_button
+    icon: mdi:autorenew
+    name: "SelfTest Button"
+    on_press: 
+      then:
+        - script.execute: selftest
+  - platform: template
+    id: effort_test_button
+    icon: mdi:autorenew
+    name: "Effort Test Button"
+    on_press: 
+      then:
+        - script.execute: effort_calibration
+  - platform: template
+    id: error_reset_button
+    icon: mdi:autorenew
+    name: "Error Reset Button"
+    on_press: 
+      then:
+        - lambda: 
+            id(safety_triggered) = false;
+            id(timeout_triggered) = false;
+            id(effort_limit) = false;
+
+text_sensor:
+  - platform: debug
+    device:
+      name: "Device Info"
+    reset_reason:
+      name: "Reset Reason"
+  - platform: template
+    name: "Setting Mode"  
+    id: setting_mode
+#    icon: mdi:ray-end
+    update_interval: never # Обновление только вручную (через скрипт)
+fan:
+  - platform: hbridge
+    id: motor
+    speed_count: 3
+    name: "Motor"
+    pin_a: motor_forward_pin
+    pin_b: motor_reverse_pin
+    enable_pin: motor_enable_pin
+    decay_mode: slow   # slow(свободное вращение), либо fast(торможение).
+remote_receiver:
+  pin:  #${rf_ao_pin}
+    number: ${rf_ao_pin} # брелок с одной кнопкой
+    # mode: INPUT_PULLUP
+    # inverted: true
+#    allow_other_uses: true
+  dump:
+    - rc_switch
+  tolerance: 50%
+  filter: 250us
+  idle: 10ms
+#  on_rc_switch :
+#    then:
+#    - if:
+#        condition: # 010100011100101001100001
+#          - lambda: 'return (x.protocol == 1 && x.code == 0x515F30);' 51CA61
+#####          - lambda: 'return (x.protocol == 1 && x.code == 010100010101111100110000);'
+#          - lambda: 'return (x.protocol == 1 && x.code == 0x51CA61);'
+#        then:
+#          - rtttl.play: 'short:d=4,o=5,b=100:16e6'
+#          - if: # Если ворота открываются
+#              condition:
+#                - lambda: 'return id(gate).current_operation == CoverOperation::COVER_OPERATION_OPENING;'
+#              then: # Остановить движение
+#                - cover.stop: gate
+#              else:
+#               - button.press: gate_open_button
+time:
+  - platform: homeassistant
+    on_time:
+      - at: '03:00:00'  # Запуск скрипта в 3 часа ночи
+        then:
+          - script.execute: selftest
+interval:
+  - interval: 24h  # Запуск скрипта каждые 24 часа
+    then:
+      - delay: 60s
+      - script.execute: selftest
+  - interval: 190s
+    then: 
+      - if:
+          condition:
+            for:
+              time: 3min
+              condition: 
+                lambda: 'return id(effort_calibration_running);'
+          then: 
+            - script.stop: effort_calibration
+            - globals.set:
+                id: effort_calibration_running
+                value: 'false'
+            - logger.log: "Калибровка завершена по тайм-ауту"
