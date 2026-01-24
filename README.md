@@ -197,7 +197,7 @@ substitutions:
 
 ## 📊 Скриншоты и Видео
 
-- [yaml файл прошивки](.yaml)
+- [yaml файл прошивки](sliding_gate_parus_v1.yaml)
 - [внешний вид](images/gate_montage.jpg)
 - [внешний вид](images/sliding-gate1.jpg)
 - [Схема соединений](images/sliding-gate-v1-shema.jpg)
