@@ -1,8 +1,8 @@
 substitutions:
-  name: sliding-gate-parus-v1
-  friendly_name: Sliding Gate Parus v1
-  friendly_name_short: sliding_gate_parus_v1
-  version: "24.01.2026"
+  name: gate
+  friendly_name: Gate
+  friendly_name_short: gate
+  version: "28.01.2026"
   device_ip: 192.168.0.170
   reboot_timeout: 0s
 # Motor Driver  
@@ -11,6 +11,7 @@ substitutions:
   motor_for_pin: GPIO25
   motor_rev_pin: GPIO19
   motor_en_pin: GPIO23
+  motor_supply_pin: GPIO17
 # Display  
   cs_pin: GPIO27
   dc_pin: GPIO15
@@ -22,7 +23,6 @@ substitutions:
   sda1: GPIO21
   scl1: GPIO22
   gerkon_pin: GPIO3
-#  свободен GPIO17
   light_barrier_switch_pin: GPIO0
   light_barrier_pin: GPIO16
 # Button
@@ -274,10 +274,22 @@ font:
       "\U000f0456", # Repeat
     ]
   - file: "fonts/arial.ttf"
+    id: arial_36
+    size: 36
+    glyphs: |-
+      ~*<>!"%()+=,-_.:°0123456789АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЬЫЪЭЮЯABCDEFGHIJKLMNOPQRSTUVWXYZ абвгдеёжзийклмнопрстуфхцчшщьыъэюяabcdefghijklmnopqrstuvwxyz'/
+
+  - file: "fonts/arial.ttf"
     id: arial_24
     size: 24
     glyphs: |-
       ~*<>!"%()+=,-_.:°0123456789АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЬЫЪЭЮЯABCDEFGHIJKLMNOPQRSTUVWXYZ абвгдеёжзийклмнопрстуфхцчшщьыъэюяabcdefghijklmnopqrstuvwxyz'/
+  - file: "fonts/arial.ttf"
+    id: arial_20
+    size: 20
+    glyphs: |-
+      ~*<>!"%()+=,-_.:°0123456789АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЬЫЪЭЮЯABCDEFGHIJKLMNOPQRSTUVWXYZ абвгдеёжзийклмнопрстуфхцчшщьыъэюяabcdefghijklmnopqrstuvwxyz'/
+
   - file: "fonts/arial.ttf"
     id: arial_14
     size: 14
@@ -797,7 +809,6 @@ cover:
                   speed: 2
                   direction: forward # либо forward, либо reverse
               - wait_until: # Ждать достижения позиции 0
-#            lambda: 'return id(gate_position_global) == 0;'
                   lambda: 'return id(my_encoder).state == 0;'
               - fan.turn_off: motor
               - globals.set: # Установить состояние в ЗАКРЫТО (нет необходимости в режиме оптимистичного обновления)
@@ -1231,6 +1242,16 @@ datetime:
             - cover.close: gate
 switch:
   - platform: gpio
+    name: "Motor Supply"
+    icon: mdi:power-cycle
+    id: motor_supply
+    pin:
+      number: ${motor_supply_pin}
+      inverted: true
+      mode:
+        output: true
+    restore_mode: ALWAYS_ON
+  - platform: gpio
     name: "Relay Lamp"
     icon: mdi:power-cycle
     id: relay_lamp_movement
@@ -1319,6 +1340,7 @@ output:
   - platform: ledc # Подсветка дисплея
     pin: ${backlight_pin}
     id: backlight_pwm
+    frequency: 10000Hz
   - platform: ledc
     pin: ${rtttl_pin}
     inverted: false
@@ -1379,7 +1401,7 @@ script:
                 state: !lambda 'return "Ворота закрываются, нажмите кнопку когда закрыто";'
             - fan.turn_on:
                 id: motor
-                speed: 3
+                speed: 2
                 direction: FORWARD
             - lambda: |-
                   id(last_direction) = 1;
@@ -1418,7 +1440,7 @@ script:
             - delay: 100ms
             - fan.turn_on:
                 id: motor
-                speed: 3
+                speed: 2
                 direction: REVERSE
             - globals.set:
                 id: settingmode
@@ -1435,6 +1457,10 @@ script:
                 id: setting_mode
                 state: !lambda 'return "Ворота настроены";'
             - logger.log: "НАСТРОЙКА ЗАВЕРШЕНА!"
+            - fan.turn_on:
+                id: motor
+                speed: 1
+            - delay: 100ms
             - fan.turn_off: motor
             - delay: 500ms
             - globals.set:
@@ -1524,6 +1550,7 @@ script:
                   id(timeout_triggered) = true;
                   ESP_LOGW("safety", "Timeout triggered! Current: %.3f A, timeout: %s, turning off supply", current, timeout_reached ? "yes" : "no");
                   id(motor).turn_off();  // останавливаем мотор
+                  id(motor_supply).turn_off();  // отключаем питание моста и мотора
                   id(gate)->make_call().set_command_stop().perform();
                   id(safety_script).stop();
                 }
@@ -1587,7 +1614,6 @@ script:
           value: '0.0'  # Сбрасываем максимальный ток перед калибровкой
       - delay: 500ms
       # Этап 1: Закрыть ворота
-
       # Проверяем, закрыты ли ворота
       - if:
           condition:
@@ -2373,10 +2399,11 @@ button:
     name: "Error Reset Button"
     on_press: 
       then:
-        - lambda: 
+        - lambda: |- 
             id(safety_triggered) = false;
             id(timeout_triggered) = false;
             id(effort_limit) = false;
+            id(motor_supply).turn_on();  // включаем питание моста и мотора
 
 text_sensor:
   - platform: debug
