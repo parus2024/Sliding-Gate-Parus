@@ -757,7 +757,7 @@ cover:
                   speed: 2
                   direction: reverse # либо forward, либо reverse
               - wait_until: # Ждать достижения конечной точки
-                  lambda: 'return ((id(gate_position_global) + 1) >= id(endstop) || id(gerkon).state);'
+                  lambda: 'return ((id(my_encoder).state + 1) >= id(endstop) || id(gerkon).state);'
               - fan.turn_off: motor
               - globals.set: # Установить состояние в ОТКРЫТО (нет необходимости в режиме оптимистичного обновления)
                   id: openclosed
@@ -800,7 +800,7 @@ cover:
 #            lambda: 'return id(gate_position_global) == 20;'
               - while:
                   condition:
-                    lambda: 'return id(gate_position_global) > 40;'
+                    lambda: 'return id(my_encoder).state > 40;'
                   then:
                     - cover.template.publish:
                         id: gate
@@ -1006,6 +1006,12 @@ sensor:
     resolution: 1
     publish_initial_value: true
 #    restore_mode: ALWAYS_ZERO # RESTORE_DEFAULT_ZERO
+#    on_value: 
+#      then:
+#        - globals.set: # Установить глобальную переменную текущей позиции
+#            id: gate_position_global
+#            value: !lambda return x; 
+
   - platform: debug
     free:
       name: "Heap Free"
