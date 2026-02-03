@@ -2,7 +2,7 @@ substitutions:
   name: gate
   friendly_name: Gate
   friendly_name_short: gate
-  version: "28.01.2026"
+  version: "02.02.2026"
   device_ip: 192.168.0.170
   reboot_timeout: 0s
 # Motor Driver  
@@ -762,6 +762,9 @@ cover:
               - globals.set: # Установить состояние в ОТКРЫТО (нет необходимости в режиме оптимистичного обновления)
                   id: openclosed
                   value: '1'
+              - globals.set:
+                  id: gate_position_global
+                  value: !lambda 'return id(my_encoder).state;' 
               - cover.template.publish:
                   id: gate
                   state: OPEN 
@@ -818,6 +821,9 @@ cover:
                   id: gate
                   state: CLOSED
                   current_operation: IDLE
+              - globals.set:
+                  id: gate_position_global
+                  value: !lambda 'return id(my_encoder).state;' 
             else:
               - rtttl.play: '${siren}'  
     #    - lambda: |-
@@ -960,6 +966,9 @@ cover:
             speed: 1
         - delay: 100ms
         - fan.turn_off: motor
+        - globals.set:
+            id: gate_position_global
+            value: !lambda 'return id(my_encoder).state;' 
         - cover.template.publish:
             id: gate
             position: !lambda 'return (float(float(id(my_encoder).state) / float(id(endstop))));' 
@@ -997,11 +1006,11 @@ sensor:
     resolution: 1
     publish_initial_value: true
 #    restore_mode: ALWAYS_ZERO # RESTORE_DEFAULT_ZERO
-    on_value: 
-      then:
-        - globals.set: # Установить глобальную переменную текущей позиции
-            id: gate_position_global
-            value: !lambda return x; 
+#    on_value: 
+#      then:
+#        - globals.set: # Установить глобальную переменную текущей позиции
+#            id: gate_position_global
+#            value: !lambda return x; 
 
   - platform: debug
     free:
